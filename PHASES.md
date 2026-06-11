@@ -4,7 +4,7 @@ We are working phase by phase with one focused commit per completed phase.
 
 ## Phase 0 - Repository Setup
 
-Status: in progress
+Status: complete
 
 Goals:
 - Keep the official starter files in a clean Git repository.
@@ -18,12 +18,16 @@ Notes:
 
 ## Phase 1 - Starter Understanding and Baseline
 
-Status: pending
+Status: complete
 
 Goals:
 - Inspect the starter implementation and read-only scripts.
 - Run or document the baseline public evaluation.
 - Record any setup blockers before implementation changes.
+
+Notes:
+- See `docs/phase1_starter_baseline.md`.
+- Public evaluation is currently blocked by missing `sentence_transformers` and `faiss` dependencies in the available Python environment.
 
 ## Phase 2 - Minimal Correct Retrieval Pipeline
 
