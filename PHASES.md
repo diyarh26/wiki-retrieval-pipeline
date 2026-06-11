@@ -31,19 +31,26 @@ Notes:
 
 ## Phase 2 - Minimal Correct Retrieval Pipeline
 
-Status: pending
+Status: complete
 
 Goals:
 - Implement a reliable end-to-end build/load/retrieve flow.
 - Ensure `run(queries)` loads prebuilt artifacts and does not rebuild the index.
 
+Notes:
+- See `docs/experiments.md`.
+- Starter baseline: `mean_ndcg@10=0.3289`, query phase `4.22s`.
+
 ## Phase 3 - Quality Improvements
 
-Status: pending
+Status: next
 
 Goals:
 - Improve NDCG@10 with chunking, title-aware retrieval, page aggregation, and lightweight reranking.
 - Record ablation results for the video.
+
+Notes:
+- First implementation target: section-aware chunks around 200 words with 40-word overlap, title prefixing, FAISS `IndexFlatIP`, and page-level score aggregation.
 
 ## Phase 4 - Fresh Clone Readiness
 

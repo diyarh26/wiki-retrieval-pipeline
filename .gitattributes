@@ -1,0 +1,2 @@
+artifacts/*.npy filter=lfs diff=lfs merge=lfs -text
+artifacts/*.index filter=lfs diff=lfs merge=lfs -text
