@@ -186,3 +186,35 @@ query_phase_time=19.09s
 ```
 
 Decision: keep this non-chunk reranker. It clears the `0.45` gate and keeps query time comfortably below 60 seconds on the public batch. Chunking remains unchanged.
+
+### Family-Aware Page Features
+
+Date: 2026-06-14
+
+Goal: improve ranking without changing chunking, embeddings, or forbidden files.
+
+Added `artifacts/page_features.json` from `scripts/build_page_features.py` with:
+
+- page type: sports, company, city, research, diplomacy, or generic
+- canonical entity and family key parsed from synthetic page openings
+- generic page penalty for broad non-synthetic pages
+- structured signals such as `event_year:1836`, `commuter_rail_airport`, `patent_pool`, `club_rebuild`, and `distribution_agreements`
+
+Retrieval changes:
+
+- classify query type at runtime
+- detect multi-answer/linking queries
+- expand candidate pools with family siblings from the current artifacts
+- use signal-aware semantic scores for family ordering
+- use narrower family fanout for sports/research and broader fanout for city/diplomacy
+- bypass company family expansion for noisy profit-sharing/spin-off queries where page-level reranking is safer
+
+Official public evaluation:
+
+```text
+public_queries=29
+mean_ndcg@10=0.5805
+query_phase_time=19.52s
+```
+
+Decision: keep. It beats the `0.5066` checkpoint, clears the `0.58` strong target, stays below 60 seconds, and does not rebuild or modify chunk artifacts.

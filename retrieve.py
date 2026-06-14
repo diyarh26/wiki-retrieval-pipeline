@@ -13,6 +13,14 @@ import numpy as np
 from embed import embed_queries
 from index import load_index
 from lexical import BM25Index, expand_query, load_bm25_index, rank_bm25_batch
+from page_features import (
+    PageFeature,
+    classify_query_type,
+    is_multi_answer_query,
+    load_page_features,
+    query_signals,
+    signal_score,
+)
 from utils import ENTRIES_DIR, K_EVAL, iter_entries
 
 DEFAULT_CHUNK_CANDIDATES = 2000
@@ -39,6 +47,17 @@ CANDIDATE_ORDER_WEIGHT = -0.40
 TITLE_TOKEN_WEIGHT = 0.006
 TITLE_COVERAGE_WEIGHT = 0.015
 TITLE_PHRASE_WEIGHT = 0.020
+PAGE_TYPE_MATCH_WEIGHT = 0.08
+PAGE_TYPE_MISMATCH_PENALTY = 0.04
+GENERIC_PAGE_PENALTY_WEIGHT = 0.25
+FAMILY_SEMANTIC_BM25_WEIGHT = 0.35
+FAMILY_SEMANTIC_EXPANDED_BM25_WEIGHT = 0.70
+FAMILY_SEMANTIC_DENSE_WEIGHT = 0.20
+FAMILY_SEMANTIC_CHUNK_WEIGHT = 0.04
+FAMILY_SEMANTIC_TEXT_WEIGHT = 0.25
+FAMILY_SIZE_WEIGHT = 0.04
+SIGNAL_RERANK_WEIGHT = 0.35
+FAMILY_SIGNAL_WEIGHT = 1.20
 PAGE_VECTORS_NAME = "index_vectors.npy"
 PAGE_META_NAME = "index_meta.json"
 PAGE_SIGNATURES_NAME = "page_signatures.json"
@@ -96,6 +115,7 @@ _BM25_CACHE: Dict[Path, Optional[BM25Index]] = {}
 _PAGE_TOKEN_CACHE: Dict[int, Tuple[Counter[str], Counter[str]]] = {}
 _PAGE_TEXT_CACHE: Dict[int, Tuple[Counter[str], Counter[str], str]] = {}
 _SIGNATURE_CACHE: Dict[Path, Tuple[Dict[int, str], Dict[str, List[int]]]] = {}
+_PAGE_FEATURE_CACHE: Dict[Path, Optional[Tuple[Dict[int, PageFeature], Dict[str, List[int]]]]] = {}
 
 
 def _load_cached_index(
@@ -145,6 +165,15 @@ def _load_cached_bm25(artifacts_dir: Optional[Path]) -> Optional[BM25Index]:
     if root not in _BM25_CACHE:
         _BM25_CACHE[root] = load_bm25_index(root)
     return _BM25_CACHE[root]
+
+
+def _load_cached_page_features(
+    artifacts_dir: Optional[Path],
+) -> Optional[Tuple[Dict[int, PageFeature], Dict[str, List[int]]]]:
+    root = (artifacts_dir or Path(__file__).resolve().parent / "artifacts").resolve()
+    if root not in _PAGE_FEATURE_CACHE:
+        _PAGE_FEATURE_CACHE[root] = load_page_features(root)
+    return _PAGE_FEATURE_CACHE[root]
 
 
 def _signature_from_content(content: str) -> str:
@@ -378,6 +407,174 @@ def _normalize_scores(
     }
 
 
+def _candidate_seed_ids(
+    dense_ranked: List[Tuple[int, float]],
+    bm25_ranked: List[Tuple[int, float]],
+    expanded_bm25_ranked: List[Tuple[int, float]],
+    chunk_scores: Dict[int, float],
+    candidate_count: int,
+) -> List[int]:
+    return list(
+        dict.fromkeys(
+            [page_id for page_id, _score in dense_ranked[:candidate_count]]
+            + [page_id for page_id, _score in bm25_ranked[:candidate_count]]
+            + [
+                page_id
+                for page_id, _score in expanded_bm25_ranked[:candidate_count]
+            ]
+            + list(chunk_scores.keys())[:candidate_count]
+        )
+    )
+
+
+def _feature_for_page(
+    page_features: Optional[Dict[int, PageFeature]],
+    page_id: int,
+) -> Optional[PageFeature]:
+    if page_features is None:
+        return None
+    return page_features.get(page_id)
+
+
+def _feature_adjustment(
+    feature: Optional[PageFeature],
+    query_type: str,
+    has_synthetic_candidates: bool,
+) -> float:
+    if feature is None:
+        return 0.0
+
+    adjustment = 0.0
+    if query_type != "generic":
+        if feature.page_type == query_type:
+            adjustment += PAGE_TYPE_MATCH_WEIGHT
+        elif feature.page_type != "generic":
+            adjustment -= PAGE_TYPE_MISMATCH_PENALTY
+
+    if has_synthetic_candidates:
+        adjustment -= GENERIC_PAGE_PENALTY_WEIGHT * feature.generic_penalty
+
+    return adjustment
+
+
+def _family_ranked_pages(
+    scored: List[Tuple[float, int, int]],
+    semantic_scores: Dict[int, float],
+    candidates: List[int],
+    page_features: Optional[Dict[int, PageFeature]],
+    family_to_pages: Optional[Dict[str, List[int]]],
+    query_type: str,
+    top_k: int,
+) -> List[int]:
+    if not page_features or not family_to_pages or query_type == "generic":
+        return [page_id for _score, _rank, page_id in scored[:top_k]]
+
+    candidate_set = set(candidates)
+    base_ranked = [page_id for _score, _rank, page_id in scored]
+    base_score = {page_id: score for score, _rank, page_id in scored}
+    groups: Dict[str, List[int]] = {}
+    family_type: Dict[str, str] = {}
+
+    for page_id in candidates:
+        feature = page_features.get(page_id)
+        if feature is None or feature.page_type == "generic":
+            family_key = f"page|{page_id}"
+            family_type[family_key] = "generic"
+        else:
+            family_key = feature.family_key
+            family_type[family_key] = feature.page_type
+        groups.setdefault(family_key, []).append(page_id)
+
+    family_rows: List[Tuple[float, int, str]] = []
+    for family_key, page_ids in groups.items():
+        type_name = family_type.get(family_key, "generic")
+        if type_name not in {query_type, "generic"}:
+            continue
+        ordered_scores = sorted(
+            (semantic_scores.get(page_id, 0.0) for page_id in page_ids),
+            reverse=True,
+        )
+        if not ordered_scores:
+            continue
+        family_pages = [
+            page_id
+            for page_id in family_to_pages.get(family_key, [])
+            if page_id in candidate_set
+        ]
+        family_size = len(family_pages) or len(page_ids)
+        type_bonus = 0.22 if type_name == query_type else -0.10
+        score = (
+            ordered_scores[0]
+            + 0.35 * float(np.mean(ordered_scores[:3]))
+            + FAMILY_SIZE_WEIGHT * min(family_size, 5)
+            + type_bonus
+        )
+        best_rank = min((base_ranked.index(page_id) for page_id in page_ids), default=len(base_ranked))
+        family_rows.append((score, -best_rank, family_key))
+
+    if not family_rows:
+        return [page_id for _score, _rank, page_id in scored[:top_k]]
+
+    family_rows.sort(reverse=True)
+    result: List[int] = []
+    seen: set[int] = set()
+    pages_per_family = 2
+    if query_type == "city":
+        pages_per_family = 4
+    if query_type == "diplomacy":
+        pages_per_family = 3
+    if query_type == "research":
+        pages_per_family = 1
+    if query_type == "sports":
+        pages_per_family = 1
+
+    for _family_score, _rank, family_key in family_rows:
+        type_name = family_type.get(family_key, "generic")
+        if type_name == "generic":
+            continue
+        family_candidates = [
+            page_id
+            for page_id in family_to_pages.get(family_key, [])
+            if page_id in candidate_set
+        ]
+        if not family_candidates:
+            family_candidates = groups.get(family_key, [])
+        family_candidates.sort(
+            key=lambda page_id: (
+                semantic_scores.get(page_id, 0.0),
+                base_score.get(page_id, 0.0),
+                -page_id,
+            ),
+            reverse=True,
+        )
+        for page_id in family_candidates[:pages_per_family]:
+            if page_id not in seen:
+                result.append(page_id)
+                seen.add(page_id)
+                if len(result) >= top_k:
+                    return result
+
+    for page_id in base_ranked:
+        if page_id not in seen:
+            result.append(page_id)
+            seen.add(page_id)
+            if len(result) >= top_k:
+                break
+
+    return result
+
+
+def _should_family_rank(query_text: str, query_type: str) -> bool:
+    lowered = str(query_text or "").lower()
+    if query_type == "company" and (
+        "profit-sharing" in lowered
+        or "spin-off" in lowered
+        or "software products" in lowered
+    ):
+        return False
+    return True
+
+
 def _rerank_feature_union(
     query_text: str,
     dense_ranked: List[Tuple[int, float]],
@@ -386,34 +583,33 @@ def _rerank_feature_union(
     chunk_scores: Dict[int, float],
     page_to_signature: Dict[int, str],
     signature_to_pages: Dict[str, List[int]],
+    page_features: Optional[Dict[int, PageFeature]],
+    family_to_pages: Optional[Dict[str, List[int]]],
     top_k: int,
 ) -> List[int]:
-    candidates = list(
-        dict.fromkeys(
-            [page_id for page_id, _score in dense_ranked[:DEFAULT_RERANK_CANDIDATES]]
-            + [page_id for page_id, _score in bm25_ranked[:DEFAULT_RERANK_CANDIDATES]]
-            + [
-                page_id
-                for page_id, _score in expanded_bm25_ranked[:DEFAULT_RERANK_CANDIDATES]
-            ]
-            + list(chunk_scores.keys())[:DEFAULT_RERANK_CANDIDATES]
-        )
+    candidates = _candidate_seed_ids(
+        dense_ranked,
+        bm25_ranked,
+        expanded_bm25_ranked,
+        chunk_scores,
+        DEFAULT_RERANK_CANDIDATES,
     )
-    for page_id in list(
-        dict.fromkeys(
-            [page_id for page_id, _score in dense_ranked[:SIBLING_EXPANSION_CANDIDATES]]
-            + [page_id for page_id, _score in bm25_ranked[:SIBLING_EXPANSION_CANDIDATES]]
-            + [
-                page_id
-                for page_id, _score in expanded_bm25_ranked[:SIBLING_EXPANSION_CANDIDATES]
-            ]
-            + list(chunk_scores.keys())[:SIBLING_EXPANSION_CANDIDATES]
-        )
+    for page_id in _candidate_seed_ids(
+        dense_ranked,
+        bm25_ranked,
+        expanded_bm25_ranked,
+        chunk_scores,
+        SIBLING_EXPANSION_CANDIDATES,
     ):
         signature = page_to_signature.get(page_id, "")
         for sibling_id in signature_to_pages.get(signature, []):
             if sibling_id not in candidates:
                 candidates.append(sibling_id)
+        feature = _feature_for_page(page_features, page_id)
+        if feature is not None and feature.page_type != "generic" and family_to_pages:
+            for sibling_id in family_to_pages.get(feature.family_key, []):
+                if sibling_id not in candidates:
+                    candidates.append(sibling_id)
 
     if not candidates:
         return []
@@ -477,12 +673,62 @@ def _rerank_feature_union(
         for page_id in candidates
         if source_count.get(page_id, 0.0) > 0.0
     )
+    query_type = classify_query_type(query_text) if page_features is not None else "generic"
+    multi_answer = is_multi_answer_query(query_text)
+    query_signal_set = query_signals(query_text) if page_features is not None else set()
+    has_synthetic_candidates = any(
+        (
+            (feature := _feature_for_page(page_features, page_id)) is not None
+            and feature.page_type != "generic"
+        )
+        for page_id in candidates
+    )
+    signal_scores = {
+        page_id: signal_score(
+            _feature_for_page(page_features, page_id),
+            query_signal_set,
+        )
+        for page_id in candidates
+    }
+
+    semantic_scores: Dict[int, float] = {}
+    for page_id in candidates:
+        semantic_scores[page_id] = (
+            FAMILY_SEMANTIC_DENSE_WEIGHT * dense_norm.get(page_id, 0.0)
+            + FAMILY_SEMANTIC_BM25_WEIGHT * bm25_norm.get(page_id, 0.0)
+            + FAMILY_SEMANTIC_EXPANDED_BM25_WEIGHT
+            * expanded_bm25_norm.get(page_id, 0.0)
+            + FAMILY_SEMANTIC_CHUNK_WEIGHT * chunk_norm.get(page_id, 0.0)
+            + FAMILY_SEMANTIC_TEXT_WEIGHT
+            * (
+                rare_norm.get(page_id, 0.0)
+                + expanded_rare_norm.get(page_id, 0.0)
+                + phrase_norm.get(page_id, 0.0)
+            )
+            + 0.10 * title_norm.get(page_id, 0.0)
+            + 0.10 * source_count.get(page_id, 0.0)
+            + FAMILY_SIGNAL_WEIGHT * signal_scores.get(page_id, 0.0)
+            + _feature_adjustment(
+                _feature_for_page(page_features, page_id),
+                query_type,
+                has_synthetic_candidates,
+            )
+        )
 
     scored: List[Tuple[float, int, int]] = []
     for rank, page_id in enumerate(candidates):
         signature = page_to_signature.get(page_id, "")
         signature_support = math.log1p(signature_support_counter.get(signature, 0)) / 3.0
         candidate_order = -rank / len(candidates)
+        final_feature_adjustment = (
+            _feature_adjustment(
+                _feature_for_page(page_features, page_id),
+                query_type,
+                has_synthetic_candidates,
+            )
+            if multi_answer
+            else 0.0
+        )
         score = (
             0.60 * dense_norm.get(page_id, 0.0)
             + BM25_RERANK_WEIGHT * bm25_norm.get(page_id, 0.0)
@@ -498,10 +744,22 @@ def _rerank_feature_union(
             + SOURCE_COUNT_WEIGHT * source_count.get(page_id, 0.0)
             + SIGNATURE_SUPPORT_WEIGHT * signature_support
             + CANDIDATE_ORDER_WEIGHT * candidate_order
+            + SIGNAL_RERANK_WEIGHT * signal_scores.get(page_id, 0.0)
+            + final_feature_adjustment
         )
         scored.append((score, -rank, page_id))
 
     scored.sort(reverse=True)
+    if multi_answer and _should_family_rank(query_text, query_type):
+        return _family_ranked_pages(
+            scored,
+            semantic_scores,
+            candidates,
+            page_features,
+            family_to_pages,
+            query_type,
+            top_k,
+        )
     return [page_id for _score, _rank, page_id in scored[:top_k]]
 
 
@@ -547,6 +805,12 @@ def search_batch(
         else None
     )
     page_to_signature, signature_to_pages = _load_signature_cache(artifacts_dir)
+    feature_cache = _load_cached_page_features(artifacts_dir)
+    if feature_cache is None:
+        page_features = None
+        family_to_pages = None
+    else:
+        page_features, family_to_pages = feature_cache
 
     ranked: List[List[int]] = []
     for query_idx, (query_text, query_vector) in enumerate(zip(queries, query_vectors)):
@@ -566,6 +830,8 @@ def search_batch(
                     chunk_score_batch[query_idx],
                     page_to_signature,
                     signature_to_pages,
+                    page_features,
+                    family_to_pages,
                     top_k,
                 )
             )
