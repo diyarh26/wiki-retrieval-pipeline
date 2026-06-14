@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "num_chunks": 267809,
+  "num_terms": 488972,
+  "num_postings": 35802515,
+  "avg_doc_length": 179.57359536087287,
+  "k1": 1.2,
+  "b": 0.75,
+  "source_chunks": "chunk.chunk_corpus current title-prefixed section chunks"
+}

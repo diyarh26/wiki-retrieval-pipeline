@@ -3,13 +3,20 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 import re
 from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
+import faiss
 import numpy as np
 
+from chunk_lexical import (
+    ChunkBM25Index,
+    load_chunk_bm25_index,
+    rank_chunk_bm25_batch,
+)
 from embed import embed_queries
 from index import load_index
 from lexical import BM25Index, expand_query, load_bm25_index, rank_bm25_batch
@@ -26,12 +33,14 @@ from utils import ENTRIES_DIR, K_EVAL, iter_entries
 DEFAULT_CHUNK_CANDIDATES = 2000
 DEFAULT_PAGE_CANDIDATES = 100
 DEFAULT_BM25_CANDIDATES = 100
+DEFAULT_CHUNK_BM25_CANDIDATES = 100
 DEFAULT_RERANK_CANDIDATES = 100
 SIBLING_EXPANSION_CANDIDATES = 50
 TOP_CHUNKS_PER_PAGE = 3
 MULTI_CHUNK_WEIGHT = 0.10
 BM25_RERANK_WEIGHT = 0.15
 EXPANDED_BM25_RERANK_WEIGHT = 0.30
+CHUNK_BM25_RERANK_WEIGHT = 0.02
 CHUNK_RERANK_WEIGHT = 0.02
 LEXICAL_RERANK_WEIGHT = 0.05
 EXPANDED_LEXICAL_RERANK_WEIGHT = 0.05
@@ -52,6 +61,7 @@ PAGE_TYPE_MISMATCH_PENALTY = 0.04
 GENERIC_PAGE_PENALTY_WEIGHT = 0.25
 FAMILY_SEMANTIC_BM25_WEIGHT = 0.35
 FAMILY_SEMANTIC_EXPANDED_BM25_WEIGHT = 0.70
+FAMILY_SEMANTIC_CHUNK_BM25_WEIGHT = 0.05
 FAMILY_SEMANTIC_DENSE_WEIGHT = 0.20
 FAMILY_SEMANTIC_CHUNK_WEIGHT = 0.04
 FAMILY_SEMANTIC_TEXT_WEIGHT = 0.25
@@ -61,6 +71,10 @@ FAMILY_SIGNAL_WEIGHT = 1.20
 PAGE_VECTORS_NAME = "index_vectors.npy"
 PAGE_META_NAME = "index_meta.json"
 PAGE_SIGNATURES_NAME = "page_signatures.json"
+TITLE_CHUNK_INDEX_NAME = "faiss_title190.index"
+TITLE_CHUNK_META_NAME = "chunk_meta_title190.json"
+USE_TITLE_CHUNKS_ENV = "WIKI_USE_TITLE_CHUNKS"
+USE_CHUNK_BM25_ENV = "WIKI_USE_CHUNK_BM25"
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _STOPWORDS = {
@@ -112,10 +126,19 @@ _INDEX_CACHE: Dict[
     ],
 ] = {}
 _BM25_CACHE: Dict[Path, Optional[BM25Index]] = {}
+_CHUNK_BM25_CACHE: Dict[Path, Optional[ChunkBM25Index]] = {}
 _PAGE_TOKEN_CACHE: Dict[int, Tuple[Counter[str], Counter[str]]] = {}
 _PAGE_TEXT_CACHE: Dict[int, Tuple[Counter[str], Counter[str], str]] = {}
 _SIGNATURE_CACHE: Dict[Path, Tuple[Dict[int, str], Dict[str, List[int]]]] = {}
 _PAGE_FEATURE_CACHE: Dict[Path, Optional[Tuple[Dict[int, PageFeature], Dict[str, List[int]]]]] = {}
+_OPTIONAL_CHUNK_INDEX_CACHE: Dict[Tuple[Path, str, str], Optional[Tuple[Any, List[int]]]] = {}
+
+
+def _env_enabled(name: str, *, default: bool = True) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _load_cached_index(
@@ -167,6 +190,13 @@ def _load_cached_bm25(artifacts_dir: Optional[Path]) -> Optional[BM25Index]:
     return _BM25_CACHE[root]
 
 
+def _load_cached_chunk_bm25(artifacts_dir: Optional[Path]) -> Optional[ChunkBM25Index]:
+    root = (artifacts_dir or Path(__file__).resolve().parent / "artifacts").resolve()
+    if root not in _CHUNK_BM25_CACHE:
+        _CHUNK_BM25_CACHE[root] = load_chunk_bm25_index(root)
+    return _CHUNK_BM25_CACHE[root]
+
+
 def _load_cached_page_features(
     artifacts_dir: Optional[Path],
 ) -> Optional[Tuple[Dict[int, PageFeature], Dict[str, List[int]]]]:
@@ -174,6 +204,35 @@ def _load_cached_page_features(
     if root not in _PAGE_FEATURE_CACHE:
         _PAGE_FEATURE_CACHE[root] = load_page_features(root)
     return _PAGE_FEATURE_CACHE[root]
+
+
+def _load_optional_chunk_index(
+    artifacts_dir: Optional[Path],
+    *,
+    index_name: str,
+    meta_name: str,
+) -> Optional[Tuple[Any, List[int]]]:
+    root = (artifacts_dir or Path(__file__).resolve().parent / "artifacts").resolve()
+    cache_key = (root, index_name, meta_name)
+    if cache_key in _OPTIONAL_CHUNK_INDEX_CACHE:
+        return _OPTIONAL_CHUNK_INDEX_CACHE[cache_key]
+
+    index_path = root / index_name
+    meta_path = root / meta_name
+    if not index_path.exists() or not meta_path.exists():
+        _OPTIONAL_CHUNK_INDEX_CACHE[cache_key] = None
+        return None
+
+    try:
+        index = faiss.read_index(str(index_path))
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        page_ids = [int(page_id) for page_id in meta["page_ids"]]
+    except Exception:
+        _OPTIONAL_CHUNK_INDEX_CACHE[cache_key] = None
+        return None
+
+    _OPTIONAL_CHUNK_INDEX_CACHE[cache_key] = (index, page_ids)
+    return _OPTIONAL_CHUNK_INDEX_CACHE[cache_key]
 
 
 def _signature_from_content(content: str) -> str:
@@ -407,10 +466,33 @@ def _normalize_scores(
     }
 
 
+def _merge_chunk_score_maps(
+    primary: Dict[int, float],
+    secondary: Optional[Dict[int, float]],
+) -> Dict[int, float]:
+    if not secondary:
+        return primary
+
+    merged = dict(primary)
+    for page_id, score in secondary.items():
+        merged[page_id] = max(merged.get(page_id, -1.0), score)
+
+    ordered = sorted(
+        merged,
+        key=lambda page_id: (merged[page_id], -page_id),
+        reverse=True,
+    )
+    return {
+        page_id: merged[page_id]
+        for page_id in ordered[: DEFAULT_RERANK_CANDIDATES * 2]
+    }
+
+
 def _candidate_seed_ids(
     dense_ranked: List[Tuple[int, float]],
     bm25_ranked: List[Tuple[int, float]],
     expanded_bm25_ranked: List[Tuple[int, float]],
+    chunk_bm25_ranked: List[Tuple[int, float]],
     chunk_scores: Dict[int, float],
     candidate_count: int,
 ) -> List[int]:
@@ -422,6 +504,7 @@ def _candidate_seed_ids(
                 page_id
                 for page_id, _score in expanded_bm25_ranked[:candidate_count]
             ]
+            + [page_id for page_id, _score in chunk_bm25_ranked[:candidate_count]]
             + list(chunk_scores.keys())[:candidate_count]
         )
     )
@@ -580,6 +663,7 @@ def _rerank_feature_union(
     dense_ranked: List[Tuple[int, float]],
     bm25_ranked: List[Tuple[int, float]],
     expanded_bm25_ranked: List[Tuple[int, float]],
+    chunk_bm25_ranked: List[Tuple[int, float]],
     chunk_scores: Dict[int, float],
     page_to_signature: Dict[int, str],
     signature_to_pages: Dict[str, List[int]],
@@ -591,6 +675,7 @@ def _rerank_feature_union(
         dense_ranked,
         bm25_ranked,
         expanded_bm25_ranked,
+        chunk_bm25_ranked,
         chunk_scores,
         DEFAULT_RERANK_CANDIDATES,
     )
@@ -598,6 +683,7 @@ def _rerank_feature_union(
         dense_ranked,
         bm25_ranked,
         expanded_bm25_ranked,
+        chunk_bm25_ranked,
         chunk_scores,
         SIBLING_EXPANSION_CANDIDATES,
     ):
@@ -617,10 +703,13 @@ def _rerank_feature_union(
     dense_scores = dict(dense_ranked)
     bm25_scores = dict(bm25_ranked)
     expanded_bm25_scores = dict(expanded_bm25_ranked)
+    chunk_bm25_scores = dict(chunk_bm25_ranked)
+    source_count_denominator = 5.0 if chunk_bm25_scores else 4.0
 
     dense_norm = _normalize_scores(dense_scores, candidates)
     bm25_norm = _normalize_scores(bm25_scores, candidates)
     expanded_bm25_norm = _normalize_scores(expanded_bm25_scores, candidates)
+    chunk_bm25_norm = _normalize_scores(chunk_bm25_scores, candidates)
     chunk_norm = _normalize_scores(chunk_scores, candidates)
 
     dense_rank = {
@@ -663,9 +752,10 @@ def _rerank_feature_union(
             int(page_id in dense_scores)
             + int(page_id in bm25_scores)
             + int(page_id in expanded_bm25_scores)
+            + int(page_id in chunk_bm25_scores)
             + int(page_id in chunk_scores)
         )
-        / 4.0
+        / source_count_denominator
         for page_id in candidates
     }
     signature_support_counter = Counter(
@@ -698,6 +788,8 @@ def _rerank_feature_union(
             + FAMILY_SEMANTIC_BM25_WEIGHT * bm25_norm.get(page_id, 0.0)
             + FAMILY_SEMANTIC_EXPANDED_BM25_WEIGHT
             * expanded_bm25_norm.get(page_id, 0.0)
+            + FAMILY_SEMANTIC_CHUNK_BM25_WEIGHT
+            * chunk_bm25_norm.get(page_id, 0.0)
             + FAMILY_SEMANTIC_CHUNK_WEIGHT * chunk_norm.get(page_id, 0.0)
             + FAMILY_SEMANTIC_TEXT_WEIGHT
             * (
@@ -733,6 +825,7 @@ def _rerank_feature_union(
             0.60 * dense_norm.get(page_id, 0.0)
             + BM25_RERANK_WEIGHT * bm25_norm.get(page_id, 0.0)
             + EXPANDED_BM25_RERANK_WEIGHT * expanded_bm25_norm.get(page_id, 0.0)
+            + CHUNK_BM25_RERANK_WEIGHT * chunk_bm25_norm.get(page_id, 0.0)
             + CHUNK_RERANK_WEIGHT * chunk_norm.get(page_id, 0.0)
             + DENSE_RANK_WEIGHT * dense_rank.get(page_id, 0.0)
             + EXPANDED_BM25_RANK_WEIGHT * expanded_bm25_rank.get(page_id, 0.0)
@@ -785,6 +878,11 @@ def search_batch(
 
     page_ids = chunk_meta["page_ids"]
     bm25_index = _load_cached_bm25(artifacts_dir)
+    chunk_bm25_index = (
+        _load_cached_chunk_bm25(artifacts_dir)
+        if _env_enabled(USE_CHUNK_BM25_ENV)
+        else None
+    )
     bm25_ranked_batch = (
         rank_bm25_batch(bm25_index, queries, top_k=DEFAULT_BM25_CANDIDATES)
         if bm25_index is not None
@@ -799,11 +897,40 @@ def search_batch(
         if bm25_index is not None
         else None
     )
+    chunk_bm25_ranked_batch = (
+        rank_chunk_bm25_batch(
+            chunk_bm25_index,
+            [expand_query(query) for query in queries],
+            top_k=DEFAULT_CHUNK_BM25_CANDIDATES,
+        )
+        if chunk_bm25_index is not None
+        else [[] for _query in queries]
+    )
     chunk_score_batch = (
         _rank_chunk_vectors(index, query_vectors, page_ids)
         if bm25_index is not None
         else None
     )
+    optional_title_index = (
+        _load_optional_chunk_index(
+            artifacts_dir,
+            index_name=TITLE_CHUNK_INDEX_NAME,
+            meta_name=TITLE_CHUNK_META_NAME,
+        )
+        if _env_enabled(USE_TITLE_CHUNKS_ENV, default=False)
+        else None
+    )
+    if chunk_score_batch is not None and optional_title_index is not None:
+        title_index, title_page_ids = optional_title_index
+        title_chunk_score_batch = _rank_chunk_vectors(
+            title_index,
+            query_vectors,
+            title_page_ids,
+        )
+        chunk_score_batch = [
+            _merge_chunk_score_maps(primary, secondary)
+            for primary, secondary in zip(chunk_score_batch, title_chunk_score_batch)
+        ]
     page_to_signature, signature_to_pages = _load_signature_cache(artifacts_dir)
     feature_cache = _load_cached_page_features(artifacts_dir)
     if feature_cache is None:
@@ -827,6 +954,7 @@ def search_batch(
                     dense_ranked,
                     bm25_ranked_batch[query_idx],
                     expanded_bm25_ranked_batch[query_idx],
+                    chunk_bm25_ranked_batch[query_idx],
                     chunk_score_batch[query_idx],
                     page_to_signature,
                     signature_to_pages,

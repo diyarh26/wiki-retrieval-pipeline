@@ -218,3 +218,72 @@ query_phase_time=19.52s
 ```
 
 Decision: keep. It beats the `0.5066` checkpoint, clears the `0.58` strong target, stays below 60 seconds, and does not rebuild or modify chunk artifacts.
+
+### Title-190 Dense Chunk Variant
+
+Date: 2026-06-14
+
+Goal: test title-prepended rechunking with smaller overlapping chunks before changing the main artifact set.
+
+Built separate optional artifacts only:
+
+```text
+chunk_words=190
+chunk_overlap=45
+short_page_words=220
+num_vectors=427630
+faiss_title190.index=627M
+chunk_meta_title190.json=15M
+```
+
+Retrieval can enable this experiment with:
+
+```text
+WIKI_USE_TITLE_CHUNKS=1
+```
+
+Official public evaluation with title chunks enabled and chunk BM25 disabled:
+
+```text
+public_queries=29
+mean_ndcg@10=0.5745
+query_phase_time=20.29s
+```
+
+Decision: reject for default retrieval because it is below the `0.5805` family-aware checkpoint. The artifact remains local for analysis, but the optional path defaults off.
+
+### Chunk-Level BM25
+
+Date: 2026-06-14
+
+Goal: test chunk-level lexical retrieval in addition to page-level BM25.
+
+Built separate optional artifacts:
+
+```text
+chunk_bm25_chunks=267809
+chunk_bm25_terms=488972
+chunk_bm25_postings=35802515
+chunk_bm25_doc_indices.npy=137M
+chunk_bm25_term_freqs.npy=137M
+chunk_bm25_terms.json=22M
+```
+
+Tested weights:
+
+```text
+chunk_bm25_rerank=0.08 family_semantic_chunk_bm25=0.20 -> 0.5762
+chunk_bm25_rerank=0.01 family_semantic_chunk_bm25=0.03 -> 0.5805
+chunk_bm25_rerank=0.04 family_semantic_chunk_bm25=0.10 -> 0.5764
+chunk_bm25_rerank=0.02 family_semantic_chunk_bm25=0.05 -> 0.5809
+```
+
+Final public evaluation:
+
+```text
+public_queries=29
+mean_ndcg@10=0.5809
+query_phase_time=24.29s
+```
+
+Decision: keep as a small general improvement. It is exact lexical passage retrieval, uses only allowed dependencies, and remains comfortably below 60 seconds. Title-190 dense chunks remain disabled by default.
