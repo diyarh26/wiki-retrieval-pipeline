@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "num_docs": 27074,
+  "num_terms": 488972,
+  "num_postings": 17147530,
+  "avg_doc_length": 1415.565708798109,
+  "k1": 1.2,
+  "b": 0.75,
+  "title_weight": 3.0,
+  "tokenizer": "lowercase alnum tokens, stopwords, min length 3"
+}

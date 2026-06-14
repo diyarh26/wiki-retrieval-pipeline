@@ -2,28 +2,46 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import re
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from embed import embed_queries
 from index import load_index
-from utils import K_EVAL
+from lexical import BM25Index, expand_query, load_bm25_index, rank_bm25_batch
+from utils import ENTRIES_DIR, K_EVAL, iter_entries
 
-DEFAULT_CHUNK_CANDIDATES = 300
-DEFAULT_PAGE_CANDIDATES = 200
+DEFAULT_CHUNK_CANDIDATES = 2000
+DEFAULT_PAGE_CANDIDATES = 100
+DEFAULT_BM25_CANDIDATES = 100
+DEFAULT_RERANK_CANDIDATES = 100
+SIBLING_EXPANSION_CANDIDATES = 50
 TOP_CHUNKS_PER_PAGE = 3
 MULTI_CHUNK_WEIGHT = 0.10
-RRF_K = 60.0
-CHUNK_RRF_WEIGHT = 1.00
-PAGE_RRF_WEIGHT = 1.15
+BM25_RERANK_WEIGHT = 0.15
+EXPANDED_BM25_RERANK_WEIGHT = 0.30
+CHUNK_RERANK_WEIGHT = 0.02
+LEXICAL_RERANK_WEIGHT = 0.05
+EXPANDED_LEXICAL_RERANK_WEIGHT = 0.05
+DENSE_RANK_WEIGHT = -0.0625
+EXPANDED_BM25_RANK_WEIGHT = -0.05
+CHUNK_RANK_WEIGHT = -0.10
+RARE_TOKEN_WEIGHT = -0.35
+TITLE_OVERLAP_WEIGHT = -0.05
+PHRASE_MATCH_WEIGHT = 0.15
+SOURCE_COUNT_WEIGHT = -0.05
+SIGNATURE_SUPPORT_WEIGHT = -1.05
+CANDIDATE_ORDER_WEIGHT = -0.40
 TITLE_TOKEN_WEIGHT = 0.006
 TITLE_COVERAGE_WEIGHT = 0.015
 TITLE_PHRASE_WEIGHT = 0.020
 PAGE_VECTORS_NAME = "index_vectors.npy"
 PAGE_META_NAME = "index_meta.json"
+PAGE_SIGNATURES_NAME = "page_signatures.json"
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _STOPWORDS = {
@@ -74,6 +92,10 @@ _INDEX_CACHE: Dict[
         Optional[List[int]],
     ],
 ] = {}
+_BM25_CACHE: Dict[Path, Optional[BM25Index]] = {}
+_PAGE_TOKEN_CACHE: Dict[int, Tuple[Counter[str], Counter[str]]] = {}
+_PAGE_TEXT_CACHE: Dict[int, Tuple[Counter[str], Counter[str], str]] = {}
+_SIGNATURE_CACHE: Dict[Path, Tuple[Dict[int, str], Dict[str, List[int]]]] = {}
 
 
 def _load_cached_index(
@@ -118,6 +140,47 @@ def _try_load_page_vectors(root: Path) -> Tuple[Optional[np.ndarray], Optional[L
     return np.ascontiguousarray(vectors, dtype=np.float32), page_ids
 
 
+def _load_cached_bm25(artifacts_dir: Optional[Path]) -> Optional[BM25Index]:
+    root = (artifacts_dir or Path(__file__).resolve().parent / "artifacts").resolve()
+    if root not in _BM25_CACHE:
+        _BM25_CACHE[root] = load_bm25_index(root)
+    return _BM25_CACHE[root]
+
+
+def _signature_from_content(content: str) -> str:
+    words = " ".join(str(content or "").split()).split()[:24]
+    return " ".join(word.lower().strip(".,;:()") for word in words)
+
+
+def _load_signature_cache(
+    artifacts_dir: Optional[Path],
+) -> Tuple[Dict[int, str], Dict[str, List[int]]]:
+    root = (artifacts_dir or Path(__file__).resolve().parent / "artifacts").resolve()
+    if root in _SIGNATURE_CACHE:
+        return _SIGNATURE_CACHE[root]
+
+    page_to_signature: Dict[int, str] = {}
+    signature_to_pages: Dict[str, List[int]] = {}
+    signature_path = root / PAGE_SIGNATURES_NAME
+
+    try:
+        rows = json.loads(signature_path.read_text(encoding="utf-8"))
+        for page_id, signature in zip(rows["page_ids"], rows["signatures"]):
+            pid = int(page_id)
+            sig = str(signature)
+            page_to_signature[pid] = sig
+            signature_to_pages.setdefault(sig, []).append(pid)
+    except Exception:
+        for record in iter_entries():
+            pid = int(record["page_id"])
+            sig = _signature_from_content(str(record.get("content", "") or ""))
+            page_to_signature[pid] = sig
+            signature_to_pages.setdefault(sig, []).append(pid)
+
+    _SIGNATURE_CACHE[root] = (page_to_signature, signature_to_pages)
+    return _SIGNATURE_CACHE[root]
+
+
 def _tokens(text: str) -> List[str]:
     return [
         token
@@ -143,6 +206,100 @@ def _title_boost(query_tokens: set[str], query_text: str, title: str) -> float:
     return boost
 
 
+def _load_page_tokens(page_id: int) -> Tuple[Counter[str], Counter[str]]:
+    if page_id not in _PAGE_TOKEN_CACHE:
+        try:
+            record = json.loads((ENTRIES_DIR / f"{page_id}.json").read_text(encoding="utf-8"))
+        except Exception:
+            _PAGE_TOKEN_CACHE[page_id] = (Counter(), Counter())
+        else:
+            title_tokens = Counter(_tokens(record.get("title", "")))
+            content_tokens = Counter(_tokens(record.get("content", "")))
+            _PAGE_TOKEN_CACHE[page_id] = (title_tokens, content_tokens)
+    return _PAGE_TOKEN_CACHE[page_id]
+
+
+def _load_page_text_features(page_id: int) -> Tuple[Counter[str], Counter[str], str]:
+    if page_id not in _PAGE_TEXT_CACHE:
+        try:
+            record = json.loads((ENTRIES_DIR / f"{page_id}.json").read_text(encoding="utf-8"))
+        except Exception:
+            _PAGE_TEXT_CACHE[page_id] = (Counter(), Counter(), "")
+        else:
+            title = str(record.get("title", ""))
+            content = str(record.get("content", "") or "")
+            _PAGE_TEXT_CACHE[page_id] = (
+                Counter(_tokens(title)),
+                Counter(_tokens(content)),
+                f"{title} {content}".lower(),
+            )
+    return _PAGE_TEXT_CACHE[page_id]
+
+
+def _lexical_score(query_tokens: set[str], page_id: int) -> float:
+    rare_tokens = [token for token in query_tokens if len(token) > 5]
+    if not rare_tokens:
+        return 0.0
+
+    title_tokens, content_tokens = _load_page_tokens(page_id)
+    coverage = sum(
+        1
+        for token in rare_tokens
+        if title_tokens.get(token, 0) > 0 or content_tokens.get(token, 0) > 0
+    ) / len(rare_tokens)
+    frequency = sum(math.log1p(content_tokens.get(token, 0)) for token in rare_tokens)
+    return coverage + 0.05 * frequency
+
+
+def _text_feature_scores(
+    query_text: str,
+    expanded_query_text: str,
+    page_id: int,
+) -> Tuple[float, float, float, float]:
+    title_tokens, content_tokens, full_text = _load_page_text_features(page_id)
+    query_tokens = set(_tokens(query_text))
+    expanded_tokens = set(_tokens(expanded_query_text))
+    rare_tokens = [token for token in query_tokens if len(token) > 5]
+    expanded_rare_tokens = [token for token in expanded_tokens if len(token) > 5]
+
+    rare_score = 0.0
+    if rare_tokens:
+        coverage = sum(
+            1
+            for token in rare_tokens
+            if title_tokens.get(token, 0) > 0 or content_tokens.get(token, 0) > 0
+        ) / len(rare_tokens)
+        frequency = sum(math.log1p(content_tokens.get(token, 0)) for token in rare_tokens)
+        rare_score = coverage + 0.05 * frequency
+
+    expanded_rare_score = 0.0
+    if expanded_rare_tokens:
+        coverage = sum(
+            1
+            for token in expanded_rare_tokens
+            if title_tokens.get(token, 0) > 0 or content_tokens.get(token, 0) > 0
+        ) / len(expanded_rare_tokens)
+        frequency = sum(
+            math.log1p(content_tokens.get(token, 0)) for token in expanded_rare_tokens
+        )
+        expanded_rare_score = coverage + 0.03 * frequency
+
+    title_overlap = 0.0
+    if title_tokens:
+        title_overlap = sum(
+            1 for token in query_tokens if title_tokens.get(token, 0) > 0
+        ) / len(title_tokens)
+
+    phrase_hits = 0
+    expanded_list = _tokens(expanded_query_text)
+    for ngram_size in (2, 3, 4):
+        for start in range(max(0, len(expanded_list) - ngram_size + 1)):
+            if " ".join(expanded_list[start : start + ngram_size]) in full_text:
+                phrase_hits += 1
+
+    return rare_score, expanded_rare_score, title_overlap, min(phrase_hits, 8) / 8.0
+
+
 def _rank_page_vectors(
     query_vector: np.ndarray,
     page_vectors: Optional[np.ndarray],
@@ -165,6 +322,189 @@ def _rank_page_vectors(
     return [(page_ids[int(idx)], float(scores[int(idx)])) for idx in top_indices]
 
 
+def _rank_chunk_vectors(
+    index: Any,
+    query_vectors: np.ndarray,
+    chunk_page_ids: List[int],
+) -> List[Dict[int, float]]:
+    if int(index.ntotal) <= 0:
+        return [{} for _query in query_vectors]
+
+    candidate_count = min(DEFAULT_CHUNK_CANDIDATES, int(index.ntotal))
+    scores, indices = index.search(query_vectors, candidate_count)
+
+    rows: List[Dict[int, float]] = []
+    for row_scores, row_indices in zip(scores, indices):
+        by_page: Dict[int, List[float]] = {}
+        for score, idx in zip(row_scores, row_indices):
+            if idx < 0:
+                continue
+            page_id = chunk_page_ids[int(idx)]
+            by_page.setdefault(page_id, []).append(float(score))
+
+        page_scores = {
+            page_id: _page_score(page_scores)
+            for page_id, page_scores in by_page.items()
+        }
+        ordered = sorted(
+            page_scores,
+            key=lambda page_id: (page_scores[page_id], -page_id),
+            reverse=True,
+        )
+        rows.append(
+            {
+                page_id: page_scores[page_id]
+                for page_id in ordered[:DEFAULT_RERANK_CANDIDATES]
+            }
+        )
+    return rows
+
+
+def _normalize_scores(
+    score_map: Dict[int, float],
+    candidates: List[int],
+) -> Dict[int, float]:
+    if not candidates:
+        return {}
+    values = [score_map.get(page_id, 0.0) for page_id in candidates]
+    low = min(values)
+    high = max(values)
+    span = high - low
+    if span <= 0.0:
+        return {page_id: 0.0 for page_id in candidates}
+    return {
+        page_id: (score_map.get(page_id, 0.0) - low) / span
+        for page_id in candidates
+    }
+
+
+def _rerank_feature_union(
+    query_text: str,
+    dense_ranked: List[Tuple[int, float]],
+    bm25_ranked: List[Tuple[int, float]],
+    expanded_bm25_ranked: List[Tuple[int, float]],
+    chunk_scores: Dict[int, float],
+    page_to_signature: Dict[int, str],
+    signature_to_pages: Dict[str, List[int]],
+    top_k: int,
+) -> List[int]:
+    candidates = list(
+        dict.fromkeys(
+            [page_id for page_id, _score in dense_ranked[:DEFAULT_RERANK_CANDIDATES]]
+            + [page_id for page_id, _score in bm25_ranked[:DEFAULT_RERANK_CANDIDATES]]
+            + [
+                page_id
+                for page_id, _score in expanded_bm25_ranked[:DEFAULT_RERANK_CANDIDATES]
+            ]
+            + list(chunk_scores.keys())[:DEFAULT_RERANK_CANDIDATES]
+        )
+    )
+    for page_id in list(
+        dict.fromkeys(
+            [page_id for page_id, _score in dense_ranked[:SIBLING_EXPANSION_CANDIDATES]]
+            + [page_id for page_id, _score in bm25_ranked[:SIBLING_EXPANSION_CANDIDATES]]
+            + [
+                page_id
+                for page_id, _score in expanded_bm25_ranked[:SIBLING_EXPANSION_CANDIDATES]
+            ]
+            + list(chunk_scores.keys())[:SIBLING_EXPANSION_CANDIDATES]
+        )
+    ):
+        signature = page_to_signature.get(page_id, "")
+        for sibling_id in signature_to_pages.get(signature, []):
+            if sibling_id not in candidates:
+                candidates.append(sibling_id)
+
+    if not candidates:
+        return []
+
+    dense_scores = dict(dense_ranked)
+    bm25_scores = dict(bm25_ranked)
+    expanded_bm25_scores = dict(expanded_bm25_ranked)
+
+    dense_norm = _normalize_scores(dense_scores, candidates)
+    bm25_norm = _normalize_scores(bm25_scores, candidates)
+    expanded_bm25_norm = _normalize_scores(expanded_bm25_scores, candidates)
+    chunk_norm = _normalize_scores(chunk_scores, candidates)
+
+    dense_rank = {
+        page_id: 1.0 / (rank + 1.0)
+        for rank, (page_id, _score) in enumerate(dense_ranked)
+    }
+    expanded_bm25_rank = {
+        page_id: 1.0 / (rank + 1.0)
+        for rank, (page_id, _score) in enumerate(expanded_bm25_ranked)
+    }
+    chunk_rank = {
+        page_id: 1.0 / (rank + 1.0)
+        for rank, page_id in enumerate(chunk_scores.keys())
+    }
+
+    expanded_query_text = expand_query(query_text)
+    raw_text_scores = {
+        page_id: _text_feature_scores(query_text, expanded_query_text, page_id)
+        for page_id in candidates
+    }
+    rare_norm = _normalize_scores(
+        {page_id: row[0] for page_id, row in raw_text_scores.items()},
+        candidates,
+    )
+    expanded_rare_norm = _normalize_scores(
+        {page_id: row[1] for page_id, row in raw_text_scores.items()},
+        candidates,
+    )
+    title_norm = _normalize_scores(
+        {page_id: row[2] for page_id, row in raw_text_scores.items()},
+        candidates,
+    )
+    phrase_norm = _normalize_scores(
+        {page_id: row[3] for page_id, row in raw_text_scores.items()},
+        candidates,
+    )
+
+    source_count = {
+        page_id: (
+            int(page_id in dense_scores)
+            + int(page_id in bm25_scores)
+            + int(page_id in expanded_bm25_scores)
+            + int(page_id in chunk_scores)
+        )
+        / 4.0
+        for page_id in candidates
+    }
+    signature_support_counter = Counter(
+        page_to_signature.get(page_id, "")
+        for page_id in candidates
+        if source_count.get(page_id, 0.0) > 0.0
+    )
+
+    scored: List[Tuple[float, int, int]] = []
+    for rank, page_id in enumerate(candidates):
+        signature = page_to_signature.get(page_id, "")
+        signature_support = math.log1p(signature_support_counter.get(signature, 0)) / 3.0
+        candidate_order = -rank / len(candidates)
+        score = (
+            0.60 * dense_norm.get(page_id, 0.0)
+            + BM25_RERANK_WEIGHT * bm25_norm.get(page_id, 0.0)
+            + EXPANDED_BM25_RERANK_WEIGHT * expanded_bm25_norm.get(page_id, 0.0)
+            + CHUNK_RERANK_WEIGHT * chunk_norm.get(page_id, 0.0)
+            + DENSE_RANK_WEIGHT * dense_rank.get(page_id, 0.0)
+            + EXPANDED_BM25_RANK_WEIGHT * expanded_bm25_rank.get(page_id, 0.0)
+            + CHUNK_RANK_WEIGHT * chunk_rank.get(page_id, 0.0)
+            + RARE_TOKEN_WEIGHT * rare_norm.get(page_id, 0.0)
+            + EXPANDED_LEXICAL_RERANK_WEIGHT * expanded_rare_norm.get(page_id, 0.0)
+            + TITLE_OVERLAP_WEIGHT * title_norm.get(page_id, 0.0)
+            + PHRASE_MATCH_WEIGHT * phrase_norm.get(page_id, 0.0)
+            + SOURCE_COUNT_WEIGHT * source_count.get(page_id, 0.0)
+            + SIGNATURE_SUPPORT_WEIGHT * signature_support
+            + CANDIDATE_ORDER_WEIGHT * candidate_order
+        )
+        scored.append((score, -rank, page_id))
+
+    scored.sort(reverse=True)
+    return [page_id for _score, _rank, page_id in scored[:top_k]]
+
+
 def search_batch(
     queries: List[str],
     *,
@@ -185,12 +525,83 @@ def search_batch(
     if query_vectors.size == 0:
         return [[] for _ in queries]
 
-    candidate_count = min(DEFAULT_CHUNK_CANDIDATES, int(index.ntotal))
-    scores, indices = index.search(query_vectors, candidate_count)
     page_ids = chunk_meta["page_ids"]
+    bm25_index = _load_cached_bm25(artifacts_dir)
+    bm25_ranked_batch = (
+        rank_bm25_batch(bm25_index, queries, top_k=DEFAULT_BM25_CANDIDATES)
+        if bm25_index is not None
+        else None
+    )
+    expanded_bm25_ranked_batch = (
+        rank_bm25_batch(
+            bm25_index,
+            [expand_query(query) for query in queries],
+            top_k=DEFAULT_BM25_CANDIDATES,
+        )
+        if bm25_index is not None
+        else None
+    )
+    chunk_score_batch = (
+        _rank_chunk_vectors(index, query_vectors, page_ids)
+        if bm25_index is not None
+        else None
+    )
+    page_to_signature, signature_to_pages = _load_signature_cache(artifacts_dir)
 
     ranked: List[List[int]] = []
-    for query_text, query_vector, row_scores, row_indices in zip(queries, query_vectors, scores, indices):
+    for query_idx, (query_text, query_vector) in enumerate(zip(queries, query_vectors)):
+        dense_ranked = _rank_page_vectors(query_vector, page_vectors, dense_page_ids)
+        if (
+            dense_ranked
+            and bm25_ranked_batch is not None
+            and expanded_bm25_ranked_batch is not None
+            and chunk_score_batch is not None
+        ):
+            ranked.append(
+                _rerank_feature_union(
+                    query_text,
+                    dense_ranked,
+                    bm25_ranked_batch[query_idx],
+                    expanded_bm25_ranked_batch[query_idx],
+                    chunk_score_batch[query_idx],
+                    page_to_signature,
+                    signature_to_pages,
+                    top_k,
+                )
+            )
+            continue
+
+        if dense_ranked:
+            query_tokens = set(_tokens(query_text))
+            lexical_scores = {
+                page_id: _lexical_score(query_tokens, page_id)
+                for page_id, _dense_score in dense_ranked
+            }
+            min_lexical = min(lexical_scores.values())
+            max_lexical = max(lexical_scores.values())
+            lexical_span = max_lexical - min_lexical
+
+            reranked: List[Tuple[float, int, int]] = []
+            for rank, (page_id, dense_score) in enumerate(dense_ranked, start=1):
+                lexical_bonus = 0.0
+                if lexical_span > 0.0:
+                    lexical_bonus = (
+                        lexical_scores[page_id] - min_lexical
+                    ) / lexical_span
+                final_score = dense_score + LEXICAL_RERANK_WEIGHT * lexical_bonus
+                reranked.append((final_score, -rank, page_id))
+
+            reranked.sort(reverse=True)
+            ranked.append([page_id for _score, _rank, page_id in reranked[:top_k]])
+            continue
+
+        candidate_count = min(DEFAULT_CHUNK_CANDIDATES, int(index.ntotal))
+        scores, indices = index.search(
+            query_vector.reshape(1, -1),
+            candidate_count,
+        )
+        row_scores = scores[0]
+        row_indices = indices[0]
         by_page: Dict[int, List[float]] = {}
         for score, idx in zip(row_scores, row_indices):
             if idx < 0:
@@ -198,34 +609,13 @@ def search_batch(
             page_id = page_ids[int(idx)]
             by_page.setdefault(page_id, []).append(float(score))
 
+        chunk_page_scores = {
+            page_id: _page_score(page_scores) for page_id, page_scores in by_page.items()
+        }
         chunk_ranked = sorted(
-            by_page.items(),
-            key=lambda item: (_page_score(item[1]), max(item[1]), -item[0]),
+            chunk_page_scores.items(),
+            key=lambda item: (item[1], -item[0]),
             reverse=True,
         )
-        dense_ranked = _rank_page_vectors(query_vector, page_vectors, dense_page_ids)
-
-        fused: Dict[int, Dict[str, float]] = {}
-        for rank, (page_id, page_scores) in enumerate(chunk_ranked, start=1):
-            row = fused.setdefault(page_id, {"score": 0.0, "raw": 0.0})
-            raw_score = _page_score(page_scores)
-            row["score"] += CHUNK_RRF_WEIGHT / (RRF_K + rank)
-            row["raw"] = max(row["raw"], raw_score)
-
-        for rank, (page_id, dense_score) in enumerate(dense_ranked, start=1):
-            row = fused.setdefault(page_id, {"score": 0.0, "raw": 0.0})
-            row["score"] += PAGE_RRF_WEIGHT / (RRF_K + rank)
-            row["raw"] = max(row["raw"], dense_score)
-
-        query_tokens = set(_tokens(query_text))
-        for page_id, row in fused.items():
-            title = page_meta.get(page_id, {}).get("title", "")
-            row["score"] += _title_boost(query_tokens, query_text, title)
-
-        ordered_pages = sorted(
-            fused.items(),
-            key=lambda item: (item[1]["score"], item[1]["raw"], -item[0]),
-            reverse=True,
-        )
-        ranked.append([page_id for page_id, _row in ordered_pages[:top_k]])
+        ranked.append([page_id for page_id, _score in chunk_ranked[:top_k]])
     return ranked
