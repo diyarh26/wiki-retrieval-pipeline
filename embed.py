@@ -1,6 +1,7 @@
 """Embedding utilities (sentence-transformers/all-MiniLM-L6-v2 only)."""
 from __future__ import annotations
 
+import os
 from typing import List, Sequence
 
 import numpy as np
@@ -14,7 +15,11 @@ _model: SentenceTransformer | None = None
 def get_model() -> SentenceTransformer:
     global _model
     if _model is None:
-        _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        device = os.environ.get("WIKI_EMBED_DEVICE")
+        if device:
+            _model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=device)
+        else:
+            _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     return _model
 
 

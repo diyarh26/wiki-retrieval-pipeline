@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "field": "title_lead",
+  "num_docs": 27074,
+  "num_terms": 82675,
+  "num_postings": 1117857,
+  "avg_doc_length": 55.98877151510674,
+  "k1": 1.2,
+  "b": 0.75
+}
