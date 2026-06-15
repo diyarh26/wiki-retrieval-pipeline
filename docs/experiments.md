@@ -287,3 +287,71 @@ query_phase_time=24.29s
 ```
 
 Decision: keep as a small general improvement. It is exact lexical passage retrieval, uses only allowed dependencies, and remains comfortably below 60 seconds. Title-190 dense chunks remain disabled by default.
+
+### Clean Hybrid Reranker Refactor
+
+Date: 2026-06-15
+
+Goal: remove public-query/template-specific retrieval logic and keep a
+defensible hybrid pipeline.
+
+Removed from query-time retrieval:
+
+```text
+template-specific query expansions
+page/query phrase signal triggers
+regex-derived synthetic family keys
+first-24-word signature sibling expansion
+family-aware multi-answer ranking
+negative weights for title overlap, rare-token overlap, and source agreement
+```
+
+Kept clean candidate sources:
+
+```text
+page dense vectors
+dense chunk FAISS aggregation
+page BM25
+chunk BM25
+generic decade expansion, e.g. 1970s -> 1970 ... 1979
+generic title/rare-token/phrase overlap
+generic broad page-type match
+source agreement
+```
+
+Rebuilt only `artifacts/page_features.json`; no embedding/chunking/index code
+changed. A full `scripts/build_index.py` run was started but stopped before it
+wrote artifacts because it projected to take about an hour and would rebuild
+the same dense chunk index.
+
+Baseline before cleanup:
+
+```text
+public_queries=29
+mean_ndcg@10=0.5809
+query_phase_time=93.99s
+```
+
+Final clean public evaluation:
+
+```text
+public_queries=29
+mean_ndcg@10=0.3783
+query_phase_time=21.10s
+```
+
+Ablations with final clean constants:
+
+```text
+dense only                         -> 0.3291
+BM25 only                          -> 0.3394
+page dense + page BM25             -> 0.3576
+full clean without chunk BM25      -> 0.3589
+full clean reranker                -> 0.3783
+```
+
+Decision: keep this branch only if generalization and code defensibility are
+more important than the public score. The public score drops sharply because
+the removed family/signature/template rules were carrying many public-query
+gains. The remaining improvements are principled retrieval signals and should
+generalize better, but they no longer exploit synthetic public-query structure.

@@ -29,62 +29,6 @@ BM25_B = 0.75
 TITLE_WEIGHT = 3.0
 MIN_TOKEN_LENGTH = 3
 
-QUERY_EXPANSIONS = (
-    ("ceo", "chief executive"),
-    ("executive", "chief executive tenure"),
-    ("deals", "agreements opened markets"),
-    ("deal", "agreement opened markets"),
-    ("overseas", "overseas service contracts neighboring republics markets revenue growth"),
-    ("distribution", "distribution agreements opened markets"),
-    ("international expansion", "international expansion phase"),
-    ("automated assembly lines", "factory modernization program automated assembly lines turbine control modules"),
-    ("factory", "factory modernization program"),
-    ("profit-sharing", "cooperative profit sharing plans labor historians"),
-    ("labor policy", "cooperative profit sharing plans"),
-    ("alloy", "research division partners universities testing next generation alloys"),
-    ("research partnerships", "research division partners universities"),
-    ("spin-off", "brand spin offs software diagnostics"),
-    ("software products", "software diagnostics"),
-    ("harbor crane", "precision components harbor cranes waterfront"),
-    ("service contracts", "overseas service contracts revenue growth"),
-    ("riverfront", "urban planners redesigned riverfront parks annual music festival"),
-    ("festivals", "annual music festival"),
-    ("light commuter rail", "transportation today relies light commuter rail cycling corridors small regional airport"),
-    ("regional airport", "small regional airport"),
-    ("transport network", "transportation today relies light commuter rail cycling corridors small regional airport"),
-    ("economy, geography", "economy geography transportation infrastructure city"),
-    ("sister-city", "sister city agreements vocational training"),
-    ("training exchanges", "sister city agreements shared vocational training"),
-    ("shipbuilding exports", "rail links expanded shipbuilding exports"),
-    ("population center", "city population economy geography infrastructure"),
-    ("lead researcher", "led research group foundational results published"),
-    ("researcher", "led research group"),
-    ("field trials", "winter trial independent sites field deployment"),
-    ("graduate teaching", "graduate instrumentation courses teach measurement protocol"),
-    ("method", "measurement protocol method"),
-    ("bridge monitoring", "structural monitoring bridges"),
-    ("patent pool", "commercial licenses patent pool"),
-    ("humidity-controlled", "controlled humidity shields"),
-    ("experiments", "controlled humidity shields reproducibility"),
-    ("reproducible", "reproducibility independent sites"),
-    ("laboratory results", "foundational results published reproducibility"),
-    ("stability", "adaptive filtering reduced noise stability"),
-    ("negotiator", "foreign minister helped finalize terms negotiations"),
-    ("overland routes", "reopened overland routes trade corridors"),
-    ("neutral observers", "neutral observers joint commission"),
-    ("joint commission", "joint commission chair"),
-    ("demobilization", "demobilization"),
-    ("signed treaty", "signed treaty"),
-    ("championship year", "championship season campaign"),
-    ("on-court leader", "captain franchise player point guard court vision leadership"),
-    ("commemorative banner", "commemorative banner home bench"),
-    ("home arena", "memorial arena home bench"),
-    ("named home arena", "memorial arena home bench"),
-    ("club rebuild", "club rebuild reliable scorer"),
-    ("finals performance", "team high 24 points final two games"),
-    ("seven-game finals", "seven game series"),
-)
-
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _STOPWORDS = {
     "about",
@@ -147,13 +91,16 @@ def tokenize(text: Any) -> List[str]:
 
 
 def expand_query(query: str) -> str:
-    """Add template-aware synonyms while keeping the required embedding model fixed."""
+    """Apply only generic lexical normalization useful for exact-match search.
+
+    The previous implementation contained query-template phrases from the
+    public set.  This version deliberately avoids hand-picked domain synonyms.
+    It only expands decade expressions such as "1970s" into the explicit years,
+    which is a general lexical-retrieval normalization.
+    """
     query_text = str(query)
     lowered = query_text.lower()
     expanded = [query_text]
-    for trigger, addition in QUERY_EXPANSIONS:
-        if trigger in lowered:
-            expanded.append(addition)
 
     for match in re.finditer(r"\b(\d{3})0s\b", lowered):
         base_year = int(match.group(1)) * 10
