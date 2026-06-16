@@ -38,6 +38,7 @@ from chunk_lexical import (
 )
 from field_lexical import load_field_bm25_indexes, rank_field_bm25_batch
 from main import run
+from retrieve import debug_search_batch
 from retrieve import _page_score
 from utils import ARTIFACTS_DIR, ENTRIES_DIR, K_EVAL, PUBLIC_QUERIES_PATH
 
@@ -483,11 +484,98 @@ def _print_per_query(
         print(f"   relevant_source_ranks={source_hit_rows}")
 
 
+def _fmt_rank(value: object) -> str:
+    return "-" if value is None else str(value)
+
+
+def _fmt_float(value: object) -> str:
+    try:
+        return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _print_feature_dump(
+    query_ids: Sequence[str],
+    queries: Sequence[str],
+    relevant_rows: Sequence[Set[int]],
+    predicted_rows: Sequence[Sequence[int]],
+    debug_rows: Sequence[Sequence[Dict[str, object]]],
+    *,
+    worst_count: int,
+    rows_per_query: int,
+) -> None:
+    scored_queries = sorted(
+        (
+            ndcg_at_k(predicted_rows[i], relevant_rows[i]),
+            i,
+        )
+        for i in range(len(queries))
+    )
+    print("\n[worst_query_candidate_feature_dump]")
+    for ndcg, query_idx in scored_queries[:worst_count]:
+        relevant = relevant_rows[query_idx]
+        rows = list(debug_rows[query_idx])
+        selected: List[Dict[str, object]] = []
+        seen: Set[int] = set()
+        for row in rows[:rows_per_query]:
+            page_id = int(row["page_id"])
+            selected.append(row)
+            seen.add(page_id)
+        for row in rows:
+            page_id = int(row["page_id"])
+            if page_id in relevant and page_id not in seen:
+                selected.append(row)
+                seen.add(page_id)
+
+        print(f"{query_idx:02d} {query_ids[query_idx]} ndcg={ndcg:.4f}")
+        print(f"   query={queries[query_idx]}")
+        print(f"   relevant={sorted(relevant)}")
+        print(
+            "   columns: final_rank rel page_id score "
+            "dense_r page_bm25_r chunk_bm25_r field_bm25_r chunk_dense_r "
+            "dense_n page_bm25_n chunk_bm25_n field_bm25_n chunk_dense_n "
+            "source lex_rrf src_rrf top20 top50 other_sources rare title phrase type"
+        )
+        for row in selected:
+            page_id = int(row["page_id"])
+            print(
+                "   "
+                f"{int(row['final_rank']):>3} "
+                f"{'*' if page_id in relevant else '-'} "
+                f"{page_id:<6} "
+                f"{_fmt_float(row.get('score'))} "
+                f"{_fmt_rank(row.get('dense_rank')):>4} "
+                f"{_fmt_rank(row.get('page_bm25_rank')):>4} "
+                f"{_fmt_rank(row.get('chunk_bm25_rank')):>4} "
+                f"{_fmt_rank(row.get('field_bm25_rank')):>4} "
+                f"{_fmt_rank(row.get('chunk_dense_rank')):>4} "
+                f"{_fmt_float(row.get('dense_norm')):>5} "
+                f"{_fmt_float(row.get('page_bm25_norm')):>5} "
+                f"{_fmt_float(row.get('chunk_bm25_norm')):>5} "
+                f"{_fmt_float(row.get('field_bm25_norm')):>5} "
+                f"{_fmt_float(row.get('chunk_dense_norm')):>5} "
+                f"{_fmt_float(row.get('source_count')):>5} "
+                f"{_fmt_float(row.get('lexical_rrf_norm')):>5} "
+                f"{_fmt_float(row.get('source_rrf_norm')):>5} "
+                f"{_fmt_float(row.get('top20_source_consensus')):>5} "
+                f"{_fmt_float(row.get('top50_source_consensus')):>5} "
+                f"{int(row.get('other_source_count', 0)):>2} "
+                f"{_fmt_float(row.get('rare_norm')):>5} "
+                f"{_fmt_float(row.get('title_norm')):>5} "
+                f"{_fmt_float(row.get('phrase_norm')):>5} "
+                f"{_fmt_float(row.get('type_match')):>4}"
+            )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--top-k", type=int, default=500)
     parser.add_argument("--use-bm25-artifact", action="store_true")
     parser.add_argument("--tune", action="store_true")
+    parser.add_argument("--dump-features", action="store_true")
+    parser.add_argument("--dump-worst", type=int, default=5)
+    parser.add_argument("--dump-candidates", type=int, default=15)
     args = parser.parse_args()
 
     t0 = time.perf_counter()
@@ -576,6 +664,20 @@ def main() -> None:
             "field_bm25": field_bm25_rows,
         },
     )
+
+    if args.dump_features:
+        t6 = time.perf_counter()
+        debug_rows = debug_search_batch(queries)
+        print(f"feature_dump_build_time={time.perf_counter() - t6:.2f}s")
+        _print_feature_dump(
+            query_ids,
+            queries,
+            relevant_rows,
+            predicted_rows,
+            debug_rows,
+            worst_count=args.dump_worst,
+            rows_per_query=args.dump_candidates,
+        )
 
     if args.tune:
         _grid_search(
