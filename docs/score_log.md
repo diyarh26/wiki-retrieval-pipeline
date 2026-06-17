@@ -102,3 +102,65 @@ q_public_28  0.0000 -> 0.0000  +0.0000
 
 Collapse check: no per-query losses for the kept 120-pool variant; gains came from `q_public_4` and `q_public_18`.
 Fresh-clone status: should work from a fresh clone after LFS pull; no new artifacts added in this experiment.
+
+Date: 2026-06-18
+Branch: exp/improve-reranker-clean
+Commit: report-only, not committed as an improvement
+Score: best probe remained 0.4338
+Time: baseline in probe 24.90s; warm variants about 5.66s-5.95s each
+Files changed: report only
+Artifacts changed: none
+General method: conservative reranker probes using field-BM25 gating, source-count/consensus weights, chunk-BM25 weight, and small RRF add-ons
+Why it is not overfit: all probes were generic source-agreement or evidence-weight changes with no query IDs, page IDs, phrase triggers, signatures, or family logic
+Keep/reject: reject all retrieval changes; none beat current best 0.4338
+
+Experiment 3 reranker variants:
+
+```text
+field require other source: 0.4338, +0.0000 vs 0.4338, neutral/reject
+field min source count 2: 0.4338, +0.0000 vs 0.4338, neutral/reject
+field require + score cap 0.6: 0.4241, -0.0097 vs 0.4338, reject
+source count weight 0.08: 0.4338, +0.0000 vs 0.4338, neutral/reject
+source count weight 0.10: 0.4326, -0.0012 vs 0.4338, reject
+light consensus boost: 0.4338, +0.0000 vs 0.4338, neutral/reject
+mid consensus boost: 0.4227, -0.0111 vs 0.4338, reject
+chunk BM25 weight 0.45: 0.4215, -0.0123 vs 0.4338, reject
+RRF add 0.02: 0.4338, +0.0000 vs 0.4338, neutral/reject
+RRF add 0.05: 0.4329, -0.0009 vs 0.4338, reject
+```
+
+Collapse check: rejected variants caused notable losses on `q_public_13`, `q_public_25`, and sometimes `q_public_4`; neutral variants had no per-query movement.
+Fresh-clone status: no code/artifact changes kept.
+
+Additional Experiment 3 rescue simulations:
+
+```text
+multi-source bounded rescue, preserve top 7/8, max 1/2 rescues from ranks 11-30: no config matched or beat 0.4338
+strict lexical+dense source-agreement rescue: best observed 0.4263, -0.0075 vs 0.4338, reject
+```
+
+Reason for rejection:
+
+```text
+The relevant pages for q_public_5, q_public_19, q_public_27, and q_public_28 are often present below top 10, but generic rescue rules also promote high-evidence nonrelevant pages on other queries. The best strict rescue damaged q_public_13 by -0.3010 and q_public_3 by -0.1144.
+```
+
+Date: 2026-06-18
+Branch: exp/improve-reranker-clean
+Commit: report-only, not committed as an improvement
+Score: no CE score run in this pass
+Time: not applicable
+Files changed: report only
+Artifacts changed: none
+General method: considered evidence-snippet cross-encoder rescue after reading existing local CE experiment reports
+Why it is not overfit: no CE code was added; skipped known public-unstable or previously failed CE variants
+Keep/reject: reject/skip CE for this pass
+
+Experiment 4 CE decision:
+
+```text
+lead-only top-20 CE from prior notes: 0.4393 but explicitly unstable and not to be repeated
+evidence-snippet CE from prior notes: best 0.3600, far below baseline/current best
+fresh-clone safety: not guaranteed because the CE model cache may not exist
+decision: do not add CE code or artifacts
+```
