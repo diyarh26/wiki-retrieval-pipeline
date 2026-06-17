@@ -140,3 +140,71 @@ phrase x2.0 + rare weight 0.0: 0.4390, +0.0052 vs 0.4338, rejected in favor of h
 phrase x2.0 + field boosts: 0.4390, +0.0052 vs 0.4338, rejected in favor of higher score
 phrase x2.0 + chunk dense 0.75: 0.4391, +0.0053 vs 0.4338, rejected because it introduced q_public_23 loss
 ```
+
+Date: 2026-06-18
+Branch: exp/improve-reranker-rebalance-clean
+Commit: pending in same improvement commit
+Score: 0.4501
+Time: 26.18s official eval (`scripts/eval_public.py`)
+Delta vs 0.4300: +0.0201
+Delta vs 0.4338: +0.0163
+Delta vs current best 0.4394: +0.0107
+Files changed: `retrieve.py`, `docs/score_log.md`
+Artifacts changed: none
+LFS needed: existing retrieval artifacts only; no new artifacts added
+General method: rounded global final-fusion rebalance that strengthens dense score, chunk BM25 score, expanded BM25 score, chunk-dense score, field BM25 rank, rare-token coverage, and generic phrase-overlap evidence while reducing page-level BM25 score, expanded-BM25 rank, and chunk-dense rank pressure
+Why it is general / not overfit: all changes are global reranker weights over existing generic retrieval features; no query IDs, page IDs, public phrase trigger lists, signatures, family extraction, template routing, or public-query detection were added
+Per-query wins vs 0.4394:
+
+```text
+q_public_12  0.6309 -> 1.0000  +0.3691
+```
+
+Per-query losses vs 0.4394:
+
+```text
+q_public_23  0.3974 -> 0.3890  -0.0083
+q_public_25  0.6199 -> 0.5701  -0.0498
+```
+
+Focus-query monitor vs 0.4394:
+
+```text
+q_public_5   0.0000 -> 0.0000  +0.0000
+q_public_10  0.0000 -> 0.0000  +0.0000
+q_public_18  0.2487 -> 0.2487  +0.0000
+q_public_19  0.0608 -> 0.0608  +0.0000
+q_public_22  0.0000 -> 0.0000  +0.0000
+q_public_25  0.6199 -> 0.5701  -0.0498
+q_public_26  0.5701 -> 0.5701  +0.0000
+q_public_27  0.0000 -> 0.0000  +0.0000
+q_public_28  0.0000 -> 0.0000  +0.0000
+```
+
+Previous CE-loss monitor vs 0.4394:
+
+```text
+q_public_4   0.7172 -> 0.7172  +0.0000
+q_public_6   0.1667 -> 0.1667  +0.0000
+q_public_7   0.1900 -> 0.1900  +0.0000
+q_public_15  1.0000 -> 1.0000  +0.0000
+q_public_21  0.6934 -> 0.6934  +0.0000
+q_public_23  0.3974 -> 0.3890  -0.0083
+```
+
+Collapse check: no severe good-query collapse observed; `q_public_25` has a moderate -0.0498 loss and should be monitored in the next experiment.
+Fresh-clone status: should work from a fresh clone after LFS pull; no new artifacts or environment variables are required.
+Keep/reject: keep; crossed the 0.45 checkpoint and paused for report
+
+Validation notes:
+
+```text
+full random weighted mix: 0.4496, rejected as too fussy and lower than the rounded compact variant
+compact without type/RRF/top50/field-score changes: 0.4501, kept as the basis
+rounded compact 13-weight variant: 0.4501, matched exact compact score
+rounded compact with title/source-count left at current values: 0.4501, kept simpler
+rounded small core without expanded BM25/chunk-dense stabilizers: 0.4482, rejected because q_public_23 dropped to 0.3317
+rounded conservative core: 0.4375, rejected
+lead dense optional source: 0.4315, rejected
+title+lead optional dense source: 0.4338, rejected as neutral vs previous best
+```
