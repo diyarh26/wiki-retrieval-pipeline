@@ -102,3 +102,41 @@ q_public_28  0.0000 -> 0.0000  +0.0000
 
 Collapse check: no per-query losses for the kept 120-pool variant; gains came from `q_public_4` and `q_public_18`.
 Fresh-clone status: should work from a fresh clone after LFS pull; no new artifacts added in this experiment.
+
+Date: 2026-06-18
+Branch: exp/continue-clean-improvements
+Commit: pending in same improvement commit
+Score: 0.4394
+Time: 26.59s official eval (`scripts/eval_public.py`)
+Delta vs 0.4338: +0.0056
+Files changed: `retrieve.py`, `docs/score_log.md`
+Artifacts changed: none
+Method: increase generic query/document phrase-overlap weight from 0.068 to 0.136 and disable the expanded-rare-token bonus
+Why it is general / not overfit: both are global lexical reranker weights over existing generic features; no query IDs, page IDs, public phrase triggers, signatures, families, or template-specific logic
+Per-query wins:
+
+```text
+q_public_4   0.7055 -> 0.7172  +0.0116
+q_public_13  0.3010 -> 0.3155  +0.0144
+q_public_14  0.3333 -> 0.3869  +0.0535
+q_public_18  0.1650 -> 0.2487  +0.0836
+```
+
+Per-query losses:
+
+```text
+none observed in validation vs score-04338-clean
+```
+
+Keep/reject: keep; new current best clean score
+
+Validation notes:
+
+```text
+phrase weight x1.5: 0.4351, +0.0013 vs 0.4338, below checkpoint threshold
+phrase weight x1.75/x2.0/x2.25: 0.4385, +0.0047 vs 0.4338
+phrase x2.0 + expanded rare weight 0.0: 0.4394, +0.0056 vs 0.4338, kept
+phrase x2.0 + rare weight 0.0: 0.4390, +0.0052 vs 0.4338, rejected in favor of higher score
+phrase x2.0 + field boosts: 0.4390, +0.0052 vs 0.4338, rejected in favor of higher score
+phrase x2.0 + chunk dense 0.75: 0.4391, +0.0053 vs 0.4338, rejected because it introduced q_public_23 loss
+```
