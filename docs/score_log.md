@@ -53,3 +53,52 @@ q_public_28  0.0000 -> 0.0000  +0.0000
 
 Collapse check: no query lost more than 0.0144 NDCG in the kept variant; previous CE-loss queries were stable except `q_public_6` at -0.0114.
 Fresh-clone status: requires title-190 artifacts to reproduce the 0.4329 score; code falls back safely if they are absent.
+
+Date: 2026-06-18
+Branch: exp/improve-candidate-pool-clean
+Commit: pending in same improvement commit
+Score: 0.4338
+Time: 24.93s official eval (`scripts/eval_public.py`)
+Files changed: `retrieve.py`, `docs/score_log.md`
+Artifacts changed: none beyond title-190 artifacts inherited from `score-04329-clean`
+General method: increase only the rerank/merged chunk-dense candidate pool from 100 to 120 while leaving source top-k settings and final scoring weights unchanged
+Why it is not overfit: no query-specific logic; this is a small recall-oriented candidate-pool increase over generic independent retrieval sources
+Keep/reject: keep; current best clean score
+
+Experiment 2 candidate-pool variants:
+
+```text
+rerank pool 120: 0.4338, +0.0009 vs 0.4329, keep
+rerank pool 125: 0.4338, +0.0009 vs 0.4329, tie but reject in favor of smaller pool
+rerank pool 150: 0.4338, +0.0009 vs 0.4329, tie but reject in favor of smaller pool
+rerank pool 175: 0.4332, +0.0003 vs 0.4329, reject
+rerank pool 200: 0.4332, +0.0003 vs 0.4329, reject
+all source pools 150: 0.4202, -0.0127 vs 0.4329, reject
+all source pools 200: 0.4236, -0.0092 vs 0.4329, reject
+chunk BM25 top 200 only: 0.4308, -0.0021 vs 0.4329, reject
+field BM25 150/rank100: 0.4233, -0.0095 vs 0.4329, reject
+field BM25 200/rank150: 0.4190, -0.0139 vs 0.4329, reject
+```
+
+Per-query deltas for kept rerank-pool variant vs `score-04329-clean`:
+
+```text
+q_public_4   0.6900 -> 0.7055  +0.0155
+q_public_5   0.0000 -> 0.0000  +0.0000
+q_public_6   0.1667 -> 0.1667  +0.0000
+q_public_7   0.1900 -> 0.1900  +0.0000
+q_public_10  0.0000 -> 0.0000  +0.0000
+q_public_15  1.0000 -> 1.0000  +0.0000
+q_public_18  0.1542 -> 0.1650  +0.0108
+q_public_19  0.0608 -> 0.0608  +0.0000
+q_public_21  0.6934 -> 0.6934  +0.0000
+q_public_22  0.0000 -> 0.0000  +0.0000
+q_public_23  0.3974 -> 0.3974  +0.0000
+q_public_25  0.6199 -> 0.6199  +0.0000
+q_public_26  0.5701 -> 0.5701  +0.0000
+q_public_27  0.0000 -> 0.0000  +0.0000
+q_public_28  0.0000 -> 0.0000  +0.0000
+```
+
+Collapse check: no per-query losses for the kept 120-pool variant; gains came from `q_public_4` and `q_public_18`.
+Fresh-clone status: should work from a fresh clone after LFS pull; no new artifacts added in this experiment.
