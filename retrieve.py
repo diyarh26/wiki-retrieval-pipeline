@@ -1141,7 +1141,7 @@ def search_batch(
             index_name=TITLE_CHUNK_INDEX_NAME,
             meta_name=TITLE_CHUNK_META_NAME,
         )
-        if _env_enabled(USE_TITLE_CHUNKS_ENV, default=False)
+        if _env_enabled(USE_TITLE_CHUNKS_ENV, default=True)
         else None
     )
     if use_chunk_dense and optional_title_index is not None:
@@ -1274,7 +1274,7 @@ def debug_search_batch(
             index_name=TITLE_CHUNK_INDEX_NAME,
             meta_name=TITLE_CHUNK_META_NAME,
         )
-        if _env_enabled(USE_TITLE_CHUNKS_ENV, default=False)
+        if _env_enabled(USE_TITLE_CHUNKS_ENV, default=True)
         else None
     )
     if use_chunk_dense and optional_title_index is not None:
