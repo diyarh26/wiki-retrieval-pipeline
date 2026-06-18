@@ -24,7 +24,7 @@ from lexical import BM25Index, expand_query, load_bm25_index, rank_bm25_batch
 from page_features import PageFeature, classify_query_type, load_page_features
 from utils import ENTRIES_DIR, K_EVAL
 
-DEFAULT_CHUNK_CANDIDATES = 2000
+DEFAULT_CHUNK_CANDIDATES = 2500
 DEFAULT_PAGE_CANDIDATES = 100
 DEFAULT_BM25_CANDIDATES = 100
 DEFAULT_CHUNK_BM25_CANDIDATES = 150
