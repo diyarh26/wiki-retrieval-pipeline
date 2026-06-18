@@ -208,3 +208,15 @@ rounded conservative core: 0.4375, rejected
 lead dense optional source: 0.4315, rejected
 title+lead optional dense source: 0.4338, rejected as neutral vs previous best
 ```
+
+Date: 2026-06-18
+Branch: exp/improve-reranker-rebalance-clean
+Commit: pending in submission-prep commit
+Score: 0.4501
+Time: 25.28s official eval after documentation cleanup (`scripts/eval_public.py`)
+Delta vs current best 0.4501: +0.0000
+Files changed: README/docs/comments/.gitignore and removal of the obsolete signature artifact builder script
+Artifacts changed: none
+General method: repository submission preparation without retrieval behavior changes
+Why it is not overfit: documentation and comments only; no query IDs, page IDs, trigger phrases, family/signature logic, or scoring changes were added
+Keep/reject: keep; final post-cleanup eval remains 0.4501

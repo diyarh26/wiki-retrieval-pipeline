@@ -29,15 +29,17 @@ DEFAULT_PAGE_CANDIDATES = 100
 DEFAULT_BM25_CANDIDATES = 100
 DEFAULT_CHUNK_BM25_CANDIDATES = 100
 DEFAULT_FIELD_BM25_CANDIDATES = 100
+# Final rerank pool size.  120 kept the useful long-tail recall from the clean
+# candidate sources without adding the regressions seen at larger pool sizes.
 DEFAULT_RERANK_CANDIDATES = 120
 DEFAULT_FIELD_BM25_SOURCES = {"title_lead"}
 DEFAULT_FIELD_BM25_MAX_RANK = 50
 TOP_CHUNKS_PER_PAGE = 3
 MULTI_CHUNK_WEIGHT = 0.10
 
-# Clean weighted fusion.  All positive weights represent evidence that should
-# help a page: semantic similarity, lexical evidence, query/title overlap, and
-# agreement between independent retrievers.
+# Clean weighted fusion.  The final ranker is dense-led, then stabilized by
+# chunk BM25, field BM25, phrase/rare-token lexical evidence, and agreement
+# between independent retrieval sources.  These are global weights only.
 DENSE_SCORE_WEIGHT = 0.913
 PAGE_BM25_SCORE_WEIGHT = 0.044
 EXPANDED_BM25_SCORE_WEIGHT = 0.025
@@ -1135,6 +1137,9 @@ def search_batch(
         if use_chunk_dense
         else [{} for _query in queries]
     )
+    # Title-focused dense chunks are a clean independent evidence source.  They
+    # improve entity/title matching and are optional so a missing artifact
+    # degrades gracefully instead of breaking retrieval.
     optional_title_index = (
         _load_optional_chunk_index(
             artifacts_dir,
@@ -1268,6 +1273,8 @@ def debug_search_batch(
         if use_chunk_dense
         else [{} for _query in queries]
     )
+    # Keep debug rows aligned with the default retrieval path, including the
+    # optional title-focused dense chunk source.
     optional_title_index = (
         _load_optional_chunk_index(
             artifacts_dir,

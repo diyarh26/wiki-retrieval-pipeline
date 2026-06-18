@@ -18,3 +18,16 @@ Thumbs.db
 # Keep artifacts tracked for grading once the offline index is built.
 !artifacts/
 !artifacts/**
+
+# Local experiment outputs not used by the default submission path.
+Project A (1).pdf
+Researching Retrieval Pipeline for NDCG.pdf
+artifacts/chunk_meta_dense180_lead.json
+artifacts/faiss_dense180_lead.index
+artifacts/lead_bm25_*.npy
+artifacts/lead_bm25_*.json
+artifacts/title_bm25_*.npy
+artifacts/title_bm25_*.json
+docs/cross_encoder_experiment.md
+docs/cross_encoder_snippet_experiment.md
+scripts/build_dense180_lead_index.py
