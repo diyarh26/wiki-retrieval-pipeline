@@ -208,3 +208,52 @@ rounded conservative core: 0.4375, rejected
 lead dense optional source: 0.4315, rejected
 title+lead optional dense source: 0.4338, rejected as neutral vs previous best
 ```
+
+Date: 2026-06-18
+Branch: exp/improve-reranker-guard-clean
+Commit: pending in same cleanup commit
+Score: 0.4501
+Time: 25.21s official eval (`scripts/eval_public.py`)
+Delta vs 0.4300: +0.0201
+Delta vs current best 0.4501: +0.0000
+Files changed: `retrieve.py`, `docs/score_log.md`
+Artifacts changed: none
+LFS needed: no new artifacts
+General method: remove only score-neutral reranker features and dead code after one-at-a-time and cumulative validation
+Why it is general / not overfit: removals are global and were accepted only when every public-query NDCG stayed unchanged; no query IDs, page IDs, phrase triggers, family logic, signatures, or template routing were added
+Removed active score-neutral features:
+
+```text
+expanded rare-token score
+title-overlap score
+lexical RRF consensus score
+source RRF consensus score
+top-50 source consensus score
+page-type match score
+generic-page penalty score
+```
+
+Removed dead query-time code:
+
+```text
+unused title-boost helper and weights
+page_features query-time loading for inactive page-type/generic-penalty features
+unused consensus-RRF helper
+```
+
+Per-query changes vs 0.4501:
+
+```text
+none observed
+```
+
+Dense180 existing-artifact tests:
+
+```text
+optional dense180 replacing title190: 0.4480, rejected; q_public_23 dropped 0.3890 -> 0.3274
+primary dense180 plus title190: 0.4453, rejected; q_public_18, q_public_19, and q_public_23 dropped
+default plus title190 plus dense180: 0.4501, neutral; rejected because it adds a local-only untracked 733 MB index without improving score
+```
+
+Keep/reject: keep cleanup only; reject dense180 integration for now
+Fresh-clone status: should work from a fresh clone after LFS pull; no new artifacts or environment variables are required

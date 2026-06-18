@@ -21,7 +21,7 @@ from embed import embed_queries
 from field_lexical import FieldBM25Index, load_field_bm25_indexes, rank_field_bm25_batch
 from index import load_index
 from lexical import BM25Index, expand_query, load_bm25_index, rank_bm25_batch
-from page_features import PageFeature, classify_query_type, load_page_features
+from page_features import classify_query_type
 from utils import ENTRIES_DIR, K_EVAL
 
 DEFAULT_CHUNK_CANDIDATES = 2000
@@ -44,7 +44,6 @@ EXPANDED_BM25_SCORE_WEIGHT = 0.025
 CHUNK_BM25_SCORE_WEIGHT = 0.549
 CHUNK_DENSE_SCORE_WEIGHT = 0.033
 FIELD_BM25_SCORE_WEIGHT = 0.163
-TITLE_OVERLAP_WEIGHT = 0.007
 RARE_TOKEN_WEIGHT = 0.050
 PHRASE_MATCH_WEIGHT = 0.203
 SOURCE_COUNT_WEIGHT = 0.058
@@ -54,20 +53,9 @@ EXPANDED_BM25_RANK_WEIGHT = 0.019
 CHUNK_BM25_RANK_WEIGHT = 0.021
 CHUNK_DENSE_RANK_WEIGHT = 0.013
 FIELD_BM25_RANK_WEIGHT = 0.170
-PAGE_TYPE_MATCH_WEIGHT = 0.046
-GENERIC_PAGE_PENALTY_WEIGHT = 0.00
 DIPLOMACY_FIELD_BM25_SCORE_WEIGHT = 0.06
 DIPLOMACY_FIELD_BM25_RANK_WEIGHT = 0.038
-EXPANDED_RARE_TOKEN_WEIGHT = 0.000
-LEXICAL_RRF_CONSENSUS_WEIGHT = 0.003
-SOURCE_RRF_CONSENSUS_WEIGHT = 0.006
 TOP20_SOURCE_CONSENSUS_WEIGHT = 0.019
-TOP50_SOURCE_CONSENSUS_WEIGHT = 0.003
-CONSENSUS_RRF_K = 60
-
-TITLE_TOKEN_WEIGHT = 0.006
-TITLE_COVERAGE_WEIGHT = 0.015
-TITLE_PHRASE_WEIGHT = 0.020
 PAGE_VECTORS_NAME = "index_vectors.npy"
 PAGE_META_NAME = "index_meta.json"
 TITLE_CHUNK_INDEX_NAME = "faiss_title190.index"
@@ -156,7 +144,6 @@ _BM25_CACHE: Dict[Path, Optional[BM25Index]] = {}
 _CHUNK_BM25_CACHE: Dict[Path, Optional[ChunkBM25Index]] = {}
 _FIELD_BM25_CACHE: Dict[Path, Dict[str, FieldBM25Index]] = {}
 _PAGE_TEXT_CACHE: Dict[int, Tuple[Counter[str], Counter[str], str]] = {}
-_PAGE_FEATURE_CACHE: Dict[Path, Optional[Tuple[Dict[int, PageFeature], Dict[str, List[int]]]]] = {}
 _OPTIONAL_CHUNK_INDEX_CACHE: Dict[Tuple[Path, str, str], Optional[Tuple[Any, List[int]]]] = {}
 
 
@@ -271,15 +258,6 @@ def _load_cached_field_bm25(
     }
 
 
-def _load_cached_page_features(
-    artifacts_dir: Optional[Path],
-) -> Optional[Tuple[Dict[int, PageFeature], Dict[str, List[int]]]]:
-    root = (artifacts_dir or Path(__file__).resolve().parent / "artifacts").resolve()
-    if root not in _PAGE_FEATURE_CACHE:
-        _PAGE_FEATURE_CACHE[root] = load_page_features(root)
-    return _PAGE_FEATURE_CACHE[root]
-
-
 def _load_optional_chunk_index(
     artifacts_dir: Optional[Path],
     *,
@@ -317,23 +295,6 @@ def _tokens(text: str) -> List[str]:
     ]
 
 
-def _title_boost(query_tokens: set[str], query_text: str, title: str) -> float:
-    title_tokens = _tokens(title)
-    if not query_tokens or not title_tokens:
-        return 0.0
-
-    title_set = set(title_tokens)
-    overlap = query_tokens & title_set
-    if not overlap:
-        return 0.0
-
-    coverage = len(overlap) / len(title_set)
-    boost = TITLE_TOKEN_WEIGHT * len(overlap) + TITLE_COVERAGE_WEIGHT * coverage
-    if " ".join(title_tokens) in query_text.lower():
-        boost += TITLE_PHRASE_WEIGHT
-    return boost
-
-
 def _load_page_text_features(page_id: int) -> Tuple[Counter[str], Counter[str], str]:
     if page_id not in _PAGE_TEXT_CACHE:
         try:
@@ -355,12 +316,10 @@ def _text_feature_scores(
     query_text: str,
     expanded_query_text: str,
     page_id: int,
-) -> Tuple[float, float, float, float]:
+) -> Tuple[float, float]:
     title_tokens, content_tokens, full_text = _load_page_text_features(page_id)
     query_tokens = set(_tokens(query_text))
-    expanded_tokens = set(_tokens(expanded_query_text))
     rare_tokens = [token for token in query_tokens if len(token) > 5]
-    expanded_rare_tokens = [token for token in expanded_tokens if len(token) > 5]
 
     rare_score = 0.0
     if rare_tokens:
@@ -372,24 +331,6 @@ def _text_feature_scores(
         frequency = sum(math.log1p(content_tokens.get(token, 0)) for token in rare_tokens)
         rare_score = coverage + 0.05 * frequency
 
-    expanded_rare_score = 0.0
-    if expanded_rare_tokens:
-        coverage = sum(
-            1
-            for token in expanded_rare_tokens
-            if title_tokens.get(token, 0) > 0 or content_tokens.get(token, 0) > 0
-        ) / len(expanded_rare_tokens)
-        frequency = sum(
-            math.log1p(content_tokens.get(token, 0)) for token in expanded_rare_tokens
-        )
-        expanded_rare_score = coverage + 0.03 * frequency
-
-    title_overlap = 0.0
-    if title_tokens:
-        title_overlap = sum(
-            1 for token in query_tokens if title_tokens.get(token, 0) > 0
-        ) / len(title_tokens)
-
     phrase_hits = 0
     expanded_list = _tokens(expanded_query_text)
     for ngram_size in (2, 3, 4):
@@ -397,7 +338,7 @@ def _text_feature_scores(
             if " ".join(expanded_list[start : start + ngram_size]) in full_text:
                 phrase_hits += 1
 
-    return rare_score, expanded_rare_score, title_overlap, min(phrase_hits, 8) / 8.0
+    return rare_score, min(phrase_hits, 8) / 8.0
 
 
 def _rank_page_vectors(
@@ -680,24 +621,6 @@ def _rrf_scores(
     return _normalize_scores(raw_scores, candidates)
 
 
-def _consensus_rrf_scores(
-    candidates: List[int],
-    source_positions: List[Dict[int, int]],
-    source_weights: List[float],
-) -> Dict[int, float]:
-    raw_scores: Dict[int, float] = {}
-    for positions, weight in zip(source_positions, source_weights):
-        if not positions or weight <= 0.0:
-            continue
-        for page_id in candidates:
-            rank = positions.get(page_id)
-            if rank is not None:
-                raw_scores[page_id] = raw_scores.get(page_id, 0.0) + (
-                    weight / (CONSENSUS_RRF_K + rank)
-                )
-    return _normalize_scores(raw_scores, candidates)
-
-
 def _top_rank_consensus(
     candidates: List[int],
     source_positions: List[Dict[int, int]],
@@ -736,7 +659,6 @@ def _rerank_feature_rows(
     chunk_bm25_ranked: List[Tuple[int, float]],
     field_bm25_ranked: List[Tuple[int, float]],
     chunk_scores: Dict[int, float],
-    page_features: Optional[Dict[int, PageFeature]],
     top_k: int,
 ) -> List[Dict[str, Any]]:
     field_as_candidate = _env_enabled(FIELD_BM25_AS_CANDIDATE_ENV, default=True)
@@ -799,11 +721,6 @@ def _rerank_feature_rows(
     chunk_bm25_position = _rank_positions(chunk_bm25_ranked)
     field_bm25_position = _rank_positions(field_evidence_ranked)
     chunk_position = _key_rank_positions(list(chunk_scores.keys()))
-    lexical_consensus_positions = [
-        bm25_position,
-        chunk_bm25_position,
-        field_bm25_position,
-    ]
     source_consensus_positions = [
         dense_position,
         bm25_position,
@@ -811,25 +728,10 @@ def _rerank_feature_rows(
         field_bm25_position,
         chunk_position,
     ]
-    lexical_rrf_norm = _consensus_rrf_scores(
-        candidates,
-        lexical_consensus_positions,
-        [1.0, 1.0, 0.7],
-    )
-    source_rrf_norm = _consensus_rrf_scores(
-        candidates,
-        source_consensus_positions,
-        [0.8, 1.1, 1.0, 0.7, 0.6],
-    )
     top20_source_consensus = _top_rank_consensus(
         candidates,
         source_consensus_positions,
         top_n=20,
-    )
-    top50_source_consensus = _top_rank_consensus(
-        candidates,
-        source_consensus_positions,
-        top_n=50,
     )
 
     expanded_query_text = expand_query(query_text)
@@ -841,16 +743,8 @@ def _rerank_feature_rows(
         {page_id: row[0] for page_id, row in raw_text_scores.items()},
         candidates,
     )
-    expanded_rare_norm = _normalize_scores(
-        {page_id: row[1] for page_id, row in raw_text_scores.items()},
-        candidates,
-    )
-    title_norm = _normalize_scores(
-        {page_id: row[2] for page_id, row in raw_text_scores.items()},
-        candidates,
-    )
     phrase_norm = _normalize_scores(
-        {page_id: row[3] for page_id, row in raw_text_scores.items()},
+        {page_id: row[1] for page_id, row in raw_text_scores.items()},
         candidates,
     )
 
@@ -912,15 +806,6 @@ def _rerank_feature_rows(
 
     scored: List[Tuple[float, int, int, Dict[str, Any]]] = []
     for rank, page_id in enumerate(candidates):
-        feature = page_features.get(page_id) if page_features else None
-        type_match = (
-            1.0
-            if feature is not None
-            and query_type != "generic"
-            and feature.page_type == query_type
-            else 0.0
-        )
-        generic_penalty = feature.generic_penalty if feature is not None else 0.0
         field_feature_allowed = False
         field_bm25_feature = 0.0
         field_rank_feature = 0.0
@@ -956,16 +841,9 @@ def _rerank_feature_rows(
                 + field_rank_weight * field_rank_feature
                 + CHUNK_DENSE_RANK_WEIGHT * chunk_rank.get(page_id, 0.0)
                 + RARE_TOKEN_WEIGHT * rare_norm.get(page_id, 0.0)
-                + EXPANDED_RARE_TOKEN_WEIGHT * expanded_rare_norm.get(page_id, 0.0)
-                + TITLE_OVERLAP_WEIGHT * title_norm.get(page_id, 0.0)
                 + PHRASE_MATCH_WEIGHT * phrase_norm.get(page_id, 0.0)
                 + SOURCE_COUNT_WEIGHT * source_count.get(page_id, 0.0)
-                + LEXICAL_RRF_CONSENSUS_WEIGHT * lexical_rrf_norm.get(page_id, 0.0)
-                + SOURCE_RRF_CONSENSUS_WEIGHT * source_rrf_norm.get(page_id, 0.0)
                 + TOP20_SOURCE_CONSENSUS_WEIGHT * top20_source_consensus.get(page_id, 0.0)
-                + TOP50_SOURCE_CONSENSUS_WEIGHT * top50_source_consensus.get(page_id, 0.0)
-                + PAGE_TYPE_MATCH_WEIGHT * type_match
-                - GENERIC_PAGE_PENALTY_WEIGHT * generic_penalty
                 + rrf_weight * rrf_norm.get(page_id, 0.0)
             )
         row: Dict[str, Any] = {
@@ -995,18 +873,11 @@ def _rerank_feature_rows(
             "chunk_dense_norm": chunk_norm.get(page_id, 0.0),
             "chunk_dense_rank": chunk_position.get(page_id),
             "rare_norm": rare_norm.get(page_id, 0.0),
-            "expanded_rare_norm": expanded_rare_norm.get(page_id, 0.0),
-            "title_norm": title_norm.get(page_id, 0.0),
             "phrase_norm": phrase_norm.get(page_id, 0.0),
             "source_count": source_count.get(page_id, 0.0),
-            "lexical_rrf_norm": lexical_rrf_norm.get(page_id, 0.0),
-            "source_rrf_norm": source_rrf_norm.get(page_id, 0.0),
             "top20_source_consensus": top20_source_consensus.get(page_id, 0.0),
-            "top50_source_consensus": top50_source_consensus.get(page_id, 0.0),
             "other_source_count": other_source_counts.get(page_id, 0),
             "all_source_count": all_source_counts.get(page_id, 0),
-            "type_match": type_match,
-            "generic_penalty": generic_penalty,
             "rrf_norm": rrf_norm.get(page_id, 0.0),
         }
         scored.append((score, -rank, page_id, row))
@@ -1027,7 +898,6 @@ def _rerank_feature_union(
     chunk_bm25_ranked: List[Tuple[int, float]],
     field_bm25_ranked: List[Tuple[int, float]],
     chunk_scores: Dict[int, float],
-    page_features: Optional[Dict[int, PageFeature]],
     top_k: int,
 ) -> List[int]:
     rows = _rerank_feature_rows(
@@ -1038,7 +908,6 @@ def _rerank_feature_union(
         chunk_bm25_ranked,
         field_bm25_ranked,
         chunk_scores,
-        page_features,
         top_k,
     )
     return [int(row["page_id"]) for row in rows[:top_k]]
@@ -1155,9 +1024,6 @@ def search_batch(
             _merge_chunk_score_maps(primary, secondary)
             for primary, secondary in zip(chunk_score_batch, title_chunk_score_batch)
         ]
-    feature_cache = _load_cached_page_features(artifacts_dir)
-    page_features = feature_cache[0] if feature_cache is not None else None
-
     ranked: List[List[int]] = []
     for query_idx, (query_text, query_vector) in enumerate(zip(queries, query_vectors)):
         dense_ranked = (
@@ -1174,7 +1040,6 @@ def search_batch(
                 chunk_bm25_ranked_batch[query_idx],
                 field_bm25_ranked_batch[query_idx],
                 chunk_score_batch[query_idx],
-                page_features,
                 top_k,
             )
         )
@@ -1288,9 +1153,6 @@ def debug_search_batch(
             _merge_chunk_score_maps(primary, secondary)
             for primary, secondary in zip(chunk_score_batch, title_chunk_score_batch)
         ]
-    feature_cache = _load_cached_page_features(artifacts_dir)
-    page_features = feature_cache[0] if feature_cache is not None else None
-
     debug_rows: List[List[Dict[str, Any]]] = []
     for query_idx, (query_text, query_vector) in enumerate(zip(queries, query_vectors)):
         dense_ranked = (
@@ -1306,7 +1168,6 @@ def debug_search_batch(
             chunk_bm25_ranked_batch[query_idx],
             field_bm25_ranked_batch[query_idx],
             chunk_score_batch[query_idx],
-            page_features,
             top_k,
         )
         debug_rows.append(rows[:candidate_limit] if candidate_limit is not None else rows)
