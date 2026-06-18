@@ -55,7 +55,7 @@ def _split_leading_heading(paragraph: str) -> Tuple[str | None, str]:
 
 
 def split_sections(content: str) -> List[Tuple[str, str]]:
-    """Best-effort section split for Wikipedia-style synthetic text."""
+    """Best-effort section split for Wikipedia-style article text."""
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", str(content or "")) if p.strip()]
     if not paragraphs:
         return [(DEFAULT_SECTION, "")]

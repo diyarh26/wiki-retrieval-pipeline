@@ -257,3 +257,22 @@ default plus title190 plus dense180: 0.4501, neutral; rejected because it adds a
 
 Keep/reject: keep cleanup only; reject dense180 integration for now
 Fresh-clone status: should work from a fresh clone after LFS pull; no new artifacts or environment variables are required
+
+Date: 2026-06-18
+Branch: exp/improve-reranker-guard-clean
+Commit: pending in submission-cleanup commit
+Score: 0.4501
+Time: 25.01s official eval (`scripts/eval_public.py`)
+Delta vs current best 0.4501: +0.0000
+Files changed: `README.md`, `chunk.py`, `lexical.py`, `page_features.py`, `scripts/build_page_features.py`, `scripts/build_page_signatures.py`, `codex_4076_candidate.diff`, `docs/score_log.md`
+Artifacts changed: none
+General method: submission cleanup only; simplify unused page-feature scaffolding to the active broad query classifier, remove obsolete signature/page-feature artifact builders, remove stale candidate diff, and refresh README artifact/eval instructions
+Why it is general / not overfit: no retrieval behavior was added; tracked Python grep has no signature/family/query-trigger/cross-encoder remnants outside evaluation/diagnostic utilities
+Per-query changes vs 0.4501:
+
+```text
+none observed
+```
+
+Keep/reject: keep; final submission-readiness cleanup
+Fresh-clone status: should work from a fresh clone after LFS pull; no new artifacts or environment variables are required

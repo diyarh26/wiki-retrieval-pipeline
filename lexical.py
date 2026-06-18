@@ -93,10 +93,8 @@ def tokenize(text: Any) -> List[str]:
 def expand_query(query: str) -> str:
     """Apply only generic lexical normalization useful for exact-match search.
 
-    The previous implementation contained query-template phrases from the
-    public set.  This version deliberately avoids hand-picked domain synonyms.
-    It only expands decade expressions such as "1970s" into the explicit years,
-    which is a general lexical-retrieval normalization.
+    Decade expressions such as "1970s" are expanded into their explicit years,
+    which helps exact lexical retrieval without relying on domain phrase lists.
     """
     query_text = str(query)
     lowered = query_text.lower()
