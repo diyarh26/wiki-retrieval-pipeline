@@ -26,14 +26,23 @@ from lexical import (
     BM25Index,
     bm25_artifacts_exist,
     build_bm25_index,
+    expand_query,
     load_bm25_index,
     rank_bm25_batch,
     tokenize,
 )
+from chunk_lexical import (
+    chunk_bm25_artifacts_exist,
+    load_chunk_bm25_index,
+    rank_chunk_bm25_batch,
+)
+from field_lexical import load_field_bm25_indexes, rank_field_bm25_batch
+from main import run
+from retrieve import debug_search_batch
 from retrieve import _page_score
 from utils import ARTIFACTS_DIR, ENTRIES_DIR, K_EVAL, PUBLIC_QUERIES_PATH
 
-KS = (10, 50, 100, 500)
+KS = (10, 50, 100, 200)
 PAGE_VECTORS_NAME = "index_vectors.npy"
 PAGE_META_NAME = "index_meta.json"
 FAISS_INDEX_NAME = "faiss.index"
@@ -125,6 +134,69 @@ def _rank_bm25(
     rows = rank_bm25_batch(index, queries, top_k=top_k)
     ranked = [[page_id for page_id, _score in row] for row in rows]
     score_maps = [{page_id: score for page_id, score in row} for row in rows]
+    return ranked, score_maps
+
+
+def _rank_chunk_bm25(
+    queries: Sequence[str],
+    *,
+    top_k: int,
+) -> Tuple[List[List[int]], List[Dict[int, float]]]:
+    if not chunk_bm25_artifacts_exist(ARTIFACTS_DIR):
+        empty_rows = [[] for _query in queries]
+        empty_scores = [{} for _query in queries]
+        return empty_rows, empty_scores
+
+    index = load_chunk_bm25_index(ARTIFACTS_DIR)
+    if index is None:
+        empty_rows = [[] for _query in queries]
+        empty_scores = [{} for _query in queries]
+        return empty_rows, empty_scores
+
+    rows = rank_chunk_bm25_batch(index, queries, top_k=top_k)
+    ranked = [[page_id for page_id, _score in row] for row in rows]
+    score_maps = [{page_id: score for page_id, score in row} for row in rows]
+    return ranked, score_maps
+
+
+def _merge_ranked_sources(
+    source_rows: List[List[Tuple[int, float]]],
+    *,
+    top_k: int,
+    rrf_k: int = 60,
+) -> List[Tuple[int, float]]:
+    scores: Dict[int, float] = {}
+    for row in source_rows:
+        for rank, (page_id, _score) in enumerate(row, start=1):
+            scores[page_id] = scores.get(page_id, 0.0) + 1.0 / (rrf_k + rank)
+    ordered = sorted(scores.items(), key=lambda item: (item[1], -item[0]), reverse=True)
+    return ordered[:top_k]
+
+
+def _rank_field_bm25(
+    queries: Sequence[str],
+    *,
+    top_k: int,
+) -> Tuple[List[List[int]], List[Dict[int, float]]]:
+    indexes = load_field_bm25_indexes(ARTIFACTS_DIR)
+    if not indexes:
+        empty_rows = [[] for _query in queries]
+        empty_scores = [{} for _query in queries]
+        return empty_rows, empty_scores
+
+    ranked_batches = [
+        rank_field_bm25_batch(index, queries, top_k=top_k)
+        for index in indexes.values()
+    ]
+    merged_rows = [
+        _merge_ranked_sources(
+            [batch[query_idx] for batch in ranked_batches],
+            top_k=top_k,
+        )
+        for query_idx in range(len(queries))
+    ]
+    ranked = [[page_id for page_id, _score in row] for row in merged_rows]
+    score_maps = [{page_id: score for page_id, score in row} for row in merged_rows]
     return ranked, score_maps
 
 
@@ -366,29 +438,134 @@ def _grid_search(
         print(f"{score:.4f} {config}")
 
 
+def _source_ranks(
+    ranked_sources: Dict[str, Sequence[int]],
+    page_id: int,
+) -> Dict[str, int]:
+    ranks: Dict[str, int] = {}
+    for source_name, ranked in ranked_sources.items():
+        try:
+            ranks[source_name] = list(ranked).index(page_id) + 1
+        except ValueError:
+            continue
+    return ranks
+
+
 def _print_per_query(
     query_ids: Sequence[str],
     queries: Sequence[str],
     relevant_rows: Sequence[Set[int]],
-    dense_rows: Sequence[Sequence[int]],
-    bm25_rows: Sequence[Sequence[int]],
-    chunk_rows: Sequence[Sequence[int]],
+    predicted_rows: Sequence[Sequence[int]],
+    source_rows: Dict[str, Sequence[Sequence[int]]],
 ) -> None:
-    print("\n[per_query_dense_misses_and_candidate_wins]")
+    print("\n[per_query_error_report]")
     for i, (query_id, query, relevant) in enumerate(zip(query_ids, queries, relevant_rows)):
-        dense10 = set(dense_rows[i][:10])
-        dense100 = set(dense_rows[i][:100])
-        bm25_100 = set(bm25_rows[i][:100])
-        chunk_100 = set(chunk_rows[i][:100])
-        union_100 = dense100 | bm25_100 | chunk_100
-        if relevant & dense10:
-            continue
-        bm25_gain = sorted(relevant & bm25_100)
-        chunk_gain = sorted(relevant & chunk_100)
-        union_gain = sorted(relevant & union_100)
-        print(f"{i:02d} {query_id} dense10_miss union100_hits={union_gain}")
-        print(f"   bm25_hits={bm25_gain} chunk_hits={chunk_gain}")
+        predicted = list(predicted_rows[i][:K_EVAL])
+        predicted_hits = set(predicted) & relevant
+        union_200 = set()
+        for rows in source_rows.values():
+            union_200.update(rows[i][:200])
+        candidate_hits = union_200 & relevant
+        missing_from_candidates = sorted(relevant - union_200)
+        candidates_ranked_too_low = sorted(candidate_hits - predicted_hits)
+        source_hit_rows = {}
+        for page_id in sorted(relevant):
+            source_hit_rows[page_id] = _source_ranks(
+                {name: rows[i][:200] for name, rows in source_rows.items()},
+                page_id,
+            )
+
+        print(f"{i:02d} {query_id} ndcg={ndcg_at_k(predicted, relevant):.4f}")
         print(f"   query={query}")
+        print(f"   relevant={sorted(relevant)}")
+        print(f"   predicted_top10={predicted}")
+        print(f"   missing_from_candidates={missing_from_candidates}")
+        print(f"   candidates_ranked_too_low={candidates_ranked_too_low}")
+        print(f"   relevant_source_ranks={source_hit_rows}")
+
+
+def _fmt_rank(value: object) -> str:
+    return "-" if value is None else str(value)
+
+
+def _fmt_float(value: object) -> str:
+    try:
+        return f"{float(value):.3f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _print_feature_dump(
+    query_ids: Sequence[str],
+    queries: Sequence[str],
+    relevant_rows: Sequence[Set[int]],
+    predicted_rows: Sequence[Sequence[int]],
+    debug_rows: Sequence[Sequence[Dict[str, object]]],
+    *,
+    worst_count: int,
+    rows_per_query: int,
+) -> None:
+    scored_queries = sorted(
+        (
+            ndcg_at_k(predicted_rows[i], relevant_rows[i]),
+            i,
+        )
+        for i in range(len(queries))
+    )
+    print("\n[worst_query_candidate_feature_dump]")
+    for ndcg, query_idx in scored_queries[:worst_count]:
+        relevant = relevant_rows[query_idx]
+        rows = list(debug_rows[query_idx])
+        selected: List[Dict[str, object]] = []
+        seen: Set[int] = set()
+        for row in rows[:rows_per_query]:
+            page_id = int(row["page_id"])
+            selected.append(row)
+            seen.add(page_id)
+        for row in rows:
+            page_id = int(row["page_id"])
+            if page_id in relevant and page_id not in seen:
+                selected.append(row)
+                seen.add(page_id)
+
+        print(f"{query_idx:02d} {query_ids[query_idx]} ndcg={ndcg:.4f}")
+        print(f"   query={queries[query_idx]}")
+        print(f"   relevant={sorted(relevant)}")
+        print(
+            "   columns: final_rank rel page_id score "
+            "dense_r page_bm25_r chunk_bm25_r field_bm25_r chunk_dense_r "
+            "dense_n page_bm25_n chunk_bm25_n field_bm25_n chunk_dense_n "
+            "source lex_rrf src_rrf top20 top50 other_sources rare title phrase type"
+        )
+        for row in selected:
+            page_id = int(row["page_id"])
+            print(
+                "   "
+                f"{int(row['final_rank']):>3} "
+                f"{'*' if page_id in relevant else '-'} "
+                f"{page_id:<6} "
+                f"{_fmt_float(row.get('score'))} "
+                f"{_fmt_rank(row.get('dense_rank')):>4} "
+                f"{_fmt_rank(row.get('page_bm25_rank')):>4} "
+                f"{_fmt_rank(row.get('chunk_bm25_rank')):>4} "
+                f"{_fmt_rank(row.get('field_bm25_rank')):>4} "
+                f"{_fmt_rank(row.get('chunk_dense_rank')):>4} "
+                f"{_fmt_float(row.get('dense_norm')):>5} "
+                f"{_fmt_float(row.get('page_bm25_norm')):>5} "
+                f"{_fmt_float(row.get('chunk_bm25_norm')):>5} "
+                f"{_fmt_float(row.get('field_bm25_norm')):>5} "
+                f"{_fmt_float(row.get('chunk_dense_norm')):>5} "
+                f"{_fmt_float(row.get('source_count')):>5} "
+                f"{_fmt_float(row.get('lexical_rrf_norm')):>5} "
+                f"{_fmt_float(row.get('source_rrf_norm')):>5} "
+                f"{_fmt_float(row.get('top20_source_consensus')):>5} "
+                f"{_fmt_float(row.get('top50_source_consensus')):>5} "
+                f"{int(row.get('other_source_count', 0)):>2} "
+                f"{_fmt_float(row.get('rare_norm')):>5} "
+                f"{_fmt_float(row.get('title_norm')):>5} "
+                f"{_fmt_float(row.get('phrase_norm')):>5} "
+                f"{_fmt_float(row.get('type_match')):>4}"
+            )
 
 
 def main() -> None:
@@ -396,6 +573,9 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=500)
     parser.add_argument("--use-bm25-artifact", action="store_true")
     parser.add_argument("--tune", action="store_true")
+    parser.add_argument("--dump-features", action="store_true")
+    parser.add_argument("--dump-worst", type=int, default=5)
+    parser.add_argument("--dump-candidates", type=int, default=15)
     args = parser.parse_args()
 
     t0 = time.perf_counter()
@@ -418,25 +598,86 @@ def main() -> None:
     bm25_rows, bm25_scores = _rank_bm25(bm25_index, queries, top_k=args.top_k)
     print(f"bm25_rank_time={time.perf_counter() - t2:.2f}s")
 
+    t2b = time.perf_counter()
+    expanded_queries = [expand_query(query) for query in queries]
+    expanded_bm25_rows, expanded_bm25_scores = _rank_bm25(
+        bm25_index,
+        expanded_queries,
+        top_k=args.top_k,
+    )
+    print(f"expanded_bm25_rank_time={time.perf_counter() - t2b:.2f}s")
+
     t3 = time.perf_counter()
     chunk_rows, chunk_scores = _rank_chunks(query_vectors, top_k=args.top_k)
     print(f"chunk_rank_time={time.perf_counter() - t3:.2f}s")
 
+    t4 = time.perf_counter()
+    chunk_bm25_rows, chunk_bm25_scores = _rank_chunk_bm25(
+        expanded_queries,
+        top_k=args.top_k,
+    )
+    print(f"chunk_bm25_rank_time={time.perf_counter() - t4:.2f}s")
+
+    t4b = time.perf_counter()
+    field_bm25_rows, field_bm25_scores = _rank_field_bm25(
+        queries,
+        top_k=args.top_k,
+    )
+    print(f"field_bm25_rank_time={time.perf_counter() - t4b:.2f}s")
+
+    t5 = time.perf_counter()
+    predicted_rows = run(queries)
+    print(f"current_run_time={time.perf_counter() - t5:.2f}s")
+
     _print_recall_table("dense_page", dense_rows, relevant_rows)
     _print_recall_table("bm25_page", bm25_rows, relevant_rows)
-    _print_recall_table("current_chunk", chunk_rows, relevant_rows)
+    _print_recall_table("expanded_bm25_page", expanded_bm25_rows, relevant_rows)
+    _print_recall_table("dense_chunk", chunk_rows, relevant_rows)
+    _print_recall_table("chunk_bm25", chunk_bm25_rows, relevant_rows)
+    _print_recall_table("field_bm25", field_bm25_rows, relevant_rows)
     _print_union_table(
-        "union_dense_bm25_chunk",
-        list(zip(dense_rows, bm25_rows, chunk_rows)),
+        "union_all_sources",
+        list(zip(dense_rows, bm25_rows, expanded_bm25_rows, chunk_rows, chunk_bm25_rows, field_bm25_rows)),
         relevant_rows,
     )
 
     print("\n[current_ranker_reference]")
     print(f"dense_top10_ndcg={mean_ndcg_at_k([row[:10] for row in dense_rows], relevant_rows):.4f}")
     print(f"bm25_top10_ndcg={mean_ndcg_at_k([row[:10] for row in bm25_rows], relevant_rows):.4f}")
-    print(f"chunk_top10_ndcg={mean_ndcg_at_k([row[:10] for row in chunk_rows], relevant_rows):.4f}")
+    print(f"expanded_bm25_top10_ndcg={mean_ndcg_at_k([row[:10] for row in expanded_bm25_rows], relevant_rows):.4f}")
+    print(f"dense_chunk_top10_ndcg={mean_ndcg_at_k([row[:10] for row in chunk_rows], relevant_rows):.4f}")
+    print(f"chunk_bm25_top10_ndcg={mean_ndcg_at_k([row[:10] for row in chunk_bm25_rows], relevant_rows):.4f}")
+    print(f"field_bm25_top10_ndcg={mean_ndcg_at_k([row[:10] for row in field_bm25_rows], relevant_rows):.4f}")
+    print(f"current_run_top10_ndcg={mean_ndcg_at_k(predicted_rows, relevant_rows):.4f}")
 
-    _print_per_query(query_ids, queries, relevant_rows, dense_rows, bm25_rows, chunk_rows)
+    _print_per_query(
+        query_ids,
+        queries,
+        relevant_rows,
+        predicted_rows,
+        {
+            "page_dense": dense_rows,
+            "page_bm25": bm25_rows,
+            "expanded_bm25": expanded_bm25_rows,
+            "chunk_dense": chunk_rows,
+            "chunk_bm25": chunk_bm25_rows,
+            "field_bm25": field_bm25_rows,
+        },
+    )
+
+    if args.dump_features:
+        t6 = time.perf_counter()
+        debug_rows = debug_search_batch(queries)
+        print(f"feature_dump_build_time={time.perf_counter() - t6:.2f}s")
+        _print_feature_dump(
+            query_ids,
+            queries,
+            relevant_rows,
+            predicted_rows,
+            debug_rows,
+            worst_count=args.dump_worst,
+            rows_per_query=args.dump_candidates,
+        )
 
     if args.tune:
         _grid_search(
