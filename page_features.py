@@ -127,7 +127,7 @@ def classify_query_type(query: str) -> str:
         if page_type != "generic"
     }
     best_type, best_score = max(scores.items(), key=lambda item: item[1])
-    return best_type if best_score >= 1 else "generic"
+    return best_type if best_score >= 1.25 else "generic"
 
 
 def extract_page_feature(record: Dict[str, Any]) -> PageFeature:
