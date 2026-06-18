@@ -21,7 +21,7 @@ mean_ndcg@10=0.4501
 Reference scoring checkpoint:
 
 ```text
-Branch: exp/improve-reranker-rebalance-clean
+Final branch: main
 Tag: score-04501-clean
 Commit: b66d2f3744fd9a772c6e77d2810a7fac519c623c
 ```
@@ -34,7 +34,7 @@ Commit: 24f628b316d07bdaf36ea72c6b25d2f4c3f522c4
 Score: 0.4300
 ```
 
-Video link: TODO
+Video link: [Section B presentation](https://1drv.ms/v/c/cd6dfd0f8d9fc96e/IQDIH48K6evxQZSImqTnZ1qtAR2pV_Z5EjH73nEY7dF0mow?e=GjCp6h)
 
 ## Fresh Clone Evaluation
 
@@ -44,10 +44,9 @@ evaluation script:
 ```bash
 git clone https://github.com/diyarh26/wiki-retrieval-pipeline.git
 cd wiki-retrieval-pipeline
-git switch exp/improve-reranker-rebalance-clean
 git lfs pull
 pip install -r requirements.txt
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/eval_public.py
+python scripts/eval_public.py
 ```
 
 Expected output:
@@ -63,6 +62,17 @@ that interpreter, for example:
 ```bash
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 /home/student/wiki-retrieval-pipeline/.venv/bin/python scripts/eval_public.py
 ```
+
+For local development only, the offline build workflow is:
+
+```bash
+pip install -r requirements.txt
+python scripts/build_index.py
+python scripts/eval_public.py
+```
+
+The grading workflow should not need to rebuild the index because the required
+artifacts are already committed under `artifacts/`.
 
 ## Required Artifacts
 
