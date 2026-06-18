@@ -148,6 +148,7 @@ weighted source fusion.
 ## Team Members
 
 TODO: add team member names.
+Aleen Nijim+ Diyar Husayyan
 
 ## Collaboration Note
 
