@@ -34,7 +34,7 @@ Commit: 24f628b316d07bdaf36ea72c6b25d2f4c3f522c4
 Score: 0.4300
 ```
 
-Video link: [Section B presentation](https://1drv.ms/v/c/cd6dfd0f8d9fc96e/IQDIH48K6evxQZSImqTnZ1qtAR2pV_Z5EjH73nEY7dF0mow?e=GjCp6h)
+Video link: https://1drv.ms/v/c/cd6dfd0f8d9fc96e/IQDIH48K6evxQZSImqTnZ1qtAR2pV_Z5EjH73nEY7dF0mow?e=GjCp6h
 
 ## Fresh Clone Evaluation
 
