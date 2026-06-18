@@ -4,14 +4,19 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
 
 .venv/
 venv/
 env/
+.idea/
 
 .ipynb_checkpoints/
 
 *.log
+*.tmp
+*.bak
+*.swp
 .DS_Store
 Thumbs.db
 
