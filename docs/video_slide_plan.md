@@ -1,148 +1,360 @@
-# Section B Video Slide Plan
+# Section B Video PowerPoint Instructions
 
-Target: 3:00 maximum, 8 slides, both members speak.
+Use this file as the exact instruction sheet for creating the final
+PowerPoint/Google Slides deck.
 
-Team split suggestion:
+Requirements from the assignment:
 
-- Aleen: slides 1-4, about 85-90 seconds.
-- Diyar: slides 5-8, about 85-90 seconds.
+- Maximum video length: 3:00.
+- Maximum slides: 10.
+- Both team members must speak.
+- Explain each pipeline stage: chunk, embed, index, retrieve.
+- Show the process followed and empirical results with metrics/plots.
+- Do not present by scrolling through code or pasting code on slides.
 
-Keep slides visual and concise. Do not show code blocks. Use diagrams, small
-tables, and one score chart.
+This deck uses 8 slides and targets about 2:50, leaving a small buffer.
 
-## Slide 1 - Problem And Goal
+## Global Slide Style
 
-On slide:
+Use a clean technical style:
 
-- Task: retrieve top 10 Wikipedia-style page IDs for each query.
-- Score: binary `mean_ndcg@10`.
-- Constraint: query-time run loads submitted artifacts; no index rebuild.
-- Final public score: `0.4501`.
+- Background: white or very light gray.
+- Accent colors:
+  - Dense retrieval: blue.
+  - Lexical/BM25 retrieval: green.
+  - Reranking/fusion: purple.
+  - Rejected experiments: red/orange.
+- Font: Aptos, Calibri, Inter, or Arial.
+- Title size: 34-40 pt.
+- Body size: 20-26 pt.
+- Keep each slide sparse. Use diagrams and charts, not paragraphs.
+- Do not paste Python code.
+- Put speaker notes below each slide, not on the slide itself.
 
-Speaker: Aleen, 15-20 seconds
+## Speaker Split
 
-Script:
+| Speaker | Slides | Target time |
+| --- | --- | ---: |
+| Aleen | 1-4 | 1:25-1:30 |
+| Diyar | 5-8 | 1:20-1:25 |
 
-> Our Section B system is an end-to-end retrieval pipeline over Wikipedia-style
-> entries. The autograder gives a batch of queries, and our `run()` function
-> returns ranked page IDs. We focused on a clean pipeline that loads prebuilt
-> artifacts and improves NDCG@10 without query-specific rules.
+Total target: about 2:50.
 
-Visual idea:
+## Slide 1 - Problem And Final Goal
 
-- Simple input/output diagram: Query batch -> Retrieval pipeline -> Top 10 page IDs.
+Speaker: Aleen
 
-## Slide 2 - Pipeline Overview
+Target time: 0:20
 
-On slide:
+Layout:
+
+- Title at top.
+- Simple horizontal diagram in the middle.
+- Final score callout box on the right.
+
+Title:
+
+```text
+Section B Retrieval Pipeline
+```
+
+Slide bullets:
+
+```text
+Task: return top 10 page IDs for each query
+Metric: mean NDCG@10 with binary relevance
+Constraint: load submitted artifacts; no index rebuild at grading time
+Final public score: 0.4501
+```
+
+Diagram:
+
+```text
+Query batch -> Retrieval pipeline -> Ranked top 10 page IDs
+```
+
+Callout box:
+
+```text
+Fresh-clone eval:
+mean_ndcg@10 = 0.4501
+runtime ≈ 28s
+```
+
+Speaker notes:
+
+```text
+Our Section B system is an end-to-end retrieval pipeline over Wikipedia-style
+entries. The autograder gives a batch of queries, and our run function returns
+ranked page IDs. We focused on a clean pipeline that loads prebuilt artifacts
+and improves NDCG@10 without query-specific rules.
+```
+
+## Slide 2 - Full Pipeline Overview
+
+Speaker: Aleen
+
+Target time: 0:25
+
+Layout:
+
+- Use a two-row flowchart.
+- Top row: offline build.
+- Bottom row: query-time retrieval.
+- Put "artifacts/" between offline and query-time.
+
+Title:
+
+```text
+Pipeline Overview
+```
+
+Flowchart row 1, label it "Offline, untimed":
 
 ```text
 Pages -> chunking -> MiniLM embeddings -> FAISS + BM25 artifacts
-Queries -> dense + lexical candidate retrieval -> weighted reranker -> top 10
 ```
 
-Key sources:
+Flowchart row 2, label it "Query time, graded":
 
-- Dense page retrieval
-- Dense chunk retrieval
-- Title-190 dense chunks
-- Page BM25
-- Chunk BM25
-- Title+lead field BM25
+```text
+Queries -> dense + lexical retrieval -> 120 candidates -> weighted reranker -> top 10
+```
 
-Speaker: Aleen, 20-25 seconds
+Small side box:
 
-Script:
+```text
+Artifacts are committed in artifacts/
+Git LFS stores large .npy and .index files
+```
 
-> The pipeline has two phases. Offline, we chunk pages, embed them with
-> MiniLM, and build FAISS and BM25 artifacts. At query time, we retrieve
-> candidates from several independent sources, combine them into a candidate
-> pool, and rerank with one global weighted score.
+Speaker notes:
 
-Visual idea:
+```text
+The pipeline has two phases. Offline, we chunk pages, embed them with MiniLM,
+and build FAISS and BM25 artifacts. At query time, we retrieve candidates from
+several independent sources, combine them into a 120-page candidate pool, and
+rerank with one global weighted score.
+```
 
-- Flowchart with two colors: offline artifacts and query-time retrieval.
+## Slide 3 - Chunk, Embed, And Index Stages
 
-## Slide 3 - Chunking, Embedding, And Indexing
+Speaker: Aleen
 
-On slide:
+Target time: 0:25
 
-- Section-aware chunks from `chunk.py`.
-- MiniLM model: `sentence-transformers/all-MiniLM-L6-v2`.
-- FAISS dense chunk index: `artifacts/faiss.index`.
-- Page dense vectors: `artifacts/index_vectors.npy`.
-- Title-focused dense chunks: `artifacts/faiss_title190.index`.
-- BM25 artifacts for page, chunk, and title+lead fields.
+Layout:
 
-Speaker: Aleen, 25 seconds
+- Three vertical columns labeled Chunk, Embed, Index.
+- Use small icons if available: document/chunk, vector/embedding, database/index.
 
-Script:
+Title:
 
-> For dense retrieval, we use MiniLM embeddings. The main FAISS index stores
-> section-aware chunks. We also keep page-level dense vectors, which help with
-> whole-document semantic matching. A title-focused dense index gives extra
-> evidence when the title is important. In parallel, BM25 artifacts give us
-> lexical evidence at page, chunk, and title-plus-lead levels.
+```text
+Chunk, Embed, Index
+```
 
-Visual idea:
+Column 1 title:
 
-- Artifact table with 3 columns: dense, lexical, metadata.
+```text
+Chunk
+```
 
-## Slide 4 - Candidate Generation
+Column 1 bullets:
 
-On slide:
+```text
+Section-aware page chunks
+Standard dense chunks for main FAISS
+Title-190 chunks for stronger entity/title evidence
+```
 
-- Candidate pool size: 120 pages.
-- Independent sources improve recall.
-- Title chunks and field BM25 added clean evidence.
-- No public-query triggers or hardcoded IDs.
+Column 2 title:
 
-Speaker: Aleen, 20 seconds
+```text
+Embed
+```
 
-Script:
+Column 2 bullets:
 
-> Candidate generation was one of the main improvements. Instead of trusting
-> one source, we union candidates from dense page, dense chunk, BM25, chunk
-> BM25, title chunks, and field BM25. We kept the final pool at 120 because it
-> improved recall without adding too much noisy competition.
+```text
+Model: all-MiniLM-L6-v2
+Embeds page chunks
+Embeds query batch at runtime
+```
 
-Visual idea:
+Column 3 title:
 
-- Venn-style source-union diagram feeding into "120 candidates".
+```text
+Index
+```
 
-## Slide 5 - Reranking Method
+Column 3 bullets:
 
-On slide:
+```text
+FAISS chunk index
+Dense page vectors
+Page BM25
+Chunk BM25
+Title+lead BM25
+```
 
-Reranker signals:
+Artifact strip at bottom:
 
-- normalized dense scores
-- BM25 and chunk BM25 scores/ranks
-- title+lead field BM25
+```text
+faiss.index | index_vectors.npy | faiss_title190.index | bm25_* | chunk_bm25_* | title_lead_bm25_*
+```
+
+Speaker notes:
+
+```text
+For dense retrieval, we use MiniLM embeddings. The main FAISS index stores
+section-aware chunks. We also keep page-level dense vectors, which help with
+whole-document semantic matching. A title-focused dense index gives extra
+evidence when titles matter. In parallel, BM25 artifacts give lexical evidence
+at page, chunk, and title-plus-lead levels.
+```
+
+## Slide 4 - Retrieval Candidate Sources
+
+Speaker: Aleen
+
+Target time: 0:20
+
+Layout:
+
+- Center circle: "120-page candidate pool".
+- Six source boxes around it feeding arrows into the center.
+- Use blue for dense sources, green for BM25 sources.
+
+Title:
+
+```text
+Candidate Generation
+```
+
+Source boxes:
+
+```text
+Dense page retrieval
+Dense chunk retrieval
+Title-190 dense chunks
+Page BM25
+Chunk BM25
+Title+lead BM25
+```
+
+Center box:
+
+```text
+Union of sources
+120 candidate pages
+```
+
+Bottom note:
+
+```text
+Goal: improve recall before final reranking
+```
+
+Speaker notes:
+
+```text
+Candidate generation was one of the main improvements. Instead of trusting one
+source, we union candidates from dense page, dense chunk, BM25, chunk BM25,
+title chunks, and field BM25. We kept the final pool at 120 because it improved
+recall without adding too much noisy competition.
+```
+
+## Slide 5 - Reranking And Final Scoring
+
+Speaker: Diyar
+
+Target time: 0:25
+
+Layout:
+
+- Left side: feature list grouped by type.
+- Right side: simple stacked-score illustration.
+- Do not list exact weight constants. Explain categories.
+
+Title:
+
+```text
+Weighted Reranker
+```
+
+Feature groups:
+
+```text
+Dense evidence
+- page dense score
+- chunk dense score
+
+Lexical evidence
+- page BM25
+- chunk BM25
+- title+lead BM25
 - rare-token coverage
 - phrase overlap
-- source count and top-20 source agreement
 
-Speaker: Diyar, 25 seconds
+Agreement evidence
+- source count
+- top-20 source consensus
+```
 
-Script:
+Formula graphic:
 
-> After candidate retrieval, we rerank with a single global weighted fusion.
-> The ranking is dense-led, but it is stabilized by lexical evidence and source
-> agreement. For example, a page that appears in multiple independent sources
-> gets more confidence than a page found by only one source.
+```text
+final score =
+dense evidence
++ lexical evidence
++ agreement evidence
+```
 
-Visual idea:
+Bottom note:
 
-- Bar/stack diagram showing signals combined into one final score.
+```text
+One global scoring formula, not query-specific rules
+```
 
-## Slide 6 - Empirical Progress
+Speaker notes:
 
-On slide:
+```text
+After candidate retrieval, we rerank with a single global weighted fusion. The
+ranking is dense-led, but it is stabilized by lexical evidence and source
+agreement. A page that appears in multiple independent sources gets more
+confidence than a page found by only one source.
+```
 
-Use a small bar chart:
+## Slide 6 - Empirical Progress Chart
 
-| Experiment | NDCG@10 |
+Speaker: Diyar
+
+Target time: 0:25
+
+Layout:
+
+- Use a vertical bar chart.
+- X-axis: experiment names.
+- Y-axis: Public mean NDCG@10.
+- Highlight the final bar in purple or dark blue.
+- Put numeric labels above every bar.
+
+Title:
+
+```text
+Empirical Progress
+```
+
+Chart type:
+
+```text
+Vertical bar chart
+```
+
+Chart data:
+
+| Experiment | Score |
 | --- | ---: |
 | Starter baseline | 0.3289 |
 | Clean baseline | 0.3783 |
@@ -152,72 +364,150 @@ Use a small bar chart:
 | Title chunks + candidate pool | 0.4338 |
 | Final reranker rebalance | 0.4501 |
 
-Speaker: Diyar, 25 seconds
+Chart settings:
 
-Script:
+```text
+Y-axis minimum: 0.30
+Y-axis maximum: 0.47
+Show data labels with 4 decimals
+Final bar color: purple or dark blue
+Earlier bars color: gray or light blue
+```
 
-> We made decisions empirically. The safe clean baseline was 0.4300. Adding
-> title chunks and improving the candidate pool reached 0.4338. Then global
-> reranker rebalance improved the final public score to 0.4501. Each kept
-> change had to improve or preserve the score without query-specific logic.
+Small callout next to final bar:
 
-Visual idea:
+```text
++0.0201 over safe 0.4300 baseline
+```
 
-- Bar chart from 0.3289 to 0.4501, with final bar highlighted.
+Speaker notes:
 
-## Slide 7 - What We Rejected
+```text
+We made decisions empirically. The safe clean baseline was 0.4300. Adding title
+chunks and improving the candidate pool reached 0.4338. Then global reranker
+rebalance improved the final public score to 0.4501. Each kept change had to
+improve or preserve the score without query-specific logic.
+```
 
-On slide:
+## Slide 7 - Rejected Experiments And Lessons
 
-Rejected experiments:
+Speaker: Diyar
 
-- Old `0.5809` branch: audited but rejected as suspicious/overfit.
-- Full 180/45 lead chunking: dropped to `0.4059`.
-- Dense180 variants: worse or neutral with extra artifact cost.
-- Cross-encoder: best `0.4393`, but unstable.
-- Pure RRF: less stable than weighted fusion.
+Target time: 0:25
 
-Speaker: Diyar, 25 seconds
+Layout:
 
-Script:
+- Use a table.
+- Left column: experiment.
+- Middle column: observed result.
+- Right column: decision/lesson.
+- Use red/orange markers for rejected rows.
 
-> We also rejected several tempting ideas. The archived 0.5809 branch had a
-> high public score, but the audit found template, family, signature, and
-> trigger-style logic, so we did not use it. Shorter chunking and cross-encoder
-> reranking also looked promising, but the measured scores were lower or caused
-> regressions.
+Title:
 
-Visual idea:
+```text
+What We Rejected
+```
 
-- "Kept vs rejected" table with green/red labels.
+Table:
+
+| Experiment | Result | Lesson |
+| --- | ---: | --- |
+| Archived old branch | 0.5809 | Rejected: suspicious template/family/signature logic |
+| Full 180/45 lead chunking | 0.4059 | Shorter chunks hurt final ranking |
+| Dense180 variants | 0.4453-0.4501 | Worse or neutral; extra artifact cost |
+| Lead-only cross-encoder | 0.4393 | Some wins, but unstable regressions |
+| Evidence-snippet cross-encoder | 0.3600 | Snippets were not reliable enough |
+| Pure RRF variants | below final | Less stable than weighted fusion |
+
+Bottom note:
+
+```text
+We kept only changes that were clean, general, and empirically useful.
+```
+
+Speaker notes:
+
+```text
+We also rejected several tempting ideas. The archived 0.5809 branch had a high
+public score, but the audit found template, family, signature, and trigger-style
+logic, so we did not use it. Shorter chunking and cross-encoder reranking also
+looked promising, but the measured scores were lower or caused regressions.
+```
 
 ## Slide 8 - Final Submission And Generalization
 
-On slide:
+Speaker: Diyar
 
-- Final branch on GitHub: `main`.
-- Final clean checkpoint: `score-04501-clean`.
-- Fresh clone eval: `mean_ndcg@10=0.4501`.
-- Runtime: about `28s`, under 60s.
-- No query IDs, page IDs, phrase triggers, synthetic families, signatures, or templates.
+Target time: 0:25
 
-Speaker: Diyar, 20-25 seconds
+Layout:
 
-Script:
+- Use a checklist on the left.
+- Use a final result card on the right.
 
-> The final repository is ready on `main`. A fresh clone with Git LFS pulled
-> runs the public eval without rebuilding indexes and reproduces 0.4501 in
-> about 28 seconds. The final system is clean because the improvements are
-> general retrieval methods: independent candidate sources and global reranker
-> features, not public-query memorization.
+Title:
 
-Visual idea:
+```text
+Final Clean Submission
+```
 
-- Final checklist with score, runtime, fresh clone, and anti-overfit checks.
+Checklist:
 
-## Timing Plan
+```text
+Fresh clone works with git lfs pull
+No index rebuild required
+Runtime ≈ 28 seconds, under 60 seconds
+Final code is on main
+```
 
-| Slide | Speaker | Target time |
+Anti-overfit checklist:
+
+```text
+No query IDs
+No hardcoded page IDs
+No public phrase triggers
+No synthetic family logic
+No first-word signatures
+No template-specific routing
+```
+
+Final result card:
+
+```text
+mean_ndcg@10 = 0.4501
+branch = main
+clean checkpoint = score-04501-clean
+```
+
+Speaker notes:
+
+```text
+The final repository is ready on main. A fresh clone with Git LFS pulled runs
+the public eval without rebuilding indexes and reproduces 0.4501 in about 28
+seconds. The final system is clean because the improvements are general
+retrieval methods: independent candidate sources and global reranker features,
+not public-query memorization.
+```
+
+## Optional Slide Generator Prompt
+
+Paste this prompt into ChatGPT, Gemini, Canva, PowerPoint Copilot, or another
+slide generator:
+
+```text
+Create an 8-slide technical presentation for a 3-minute university project
+video. Use the exact slide titles, bullet text, chart data, table data, and
+speaker notes from docs/video_slide_plan.md. Keep the style clean and
+professional. Do not include code blocks on the slides. Use diagrams, a bar
+chart, and compact tables. The presentation is about a Section B Wikipedia
+retrieval pipeline with final public mean_ndcg@10 = 0.4501. Both team members
+must speak: Aleen presents slides 1-4 and Diyar presents slides 5-8.
+```
+
+## Timing Checklist
+
+| Slide | Speaker | Target |
 | --- | --- | ---: |
 | 1 | Aleen | 0:20 |
 | 2 | Aleen | 0:25 |
@@ -228,12 +518,14 @@ Visual idea:
 | 7 | Diyar | 0:25 |
 | 8 | Diyar | 0:25 |
 
-Total target: about 2:50. This leaves a small buffer below 3:00.
+Total target: about 2:50.
 
-## Slide Design Notes
+## Final Recording Checklist
 
-- Use 1 architecture diagram, 1 artifact table, 1 score chart, and 1 rejected-experiment table.
-- Keep each slide to 3-5 bullets.
-- Do not paste code on slides.
-- Put the final GitHub branch and video link in the README after recording.
-- Practice once with a timer; cut one bullet from slides 3 or 7 if over 2:55.
+- Record under 3:00.
+- Both members speak clearly.
+- Do not scroll through code.
+- Mention the final score: `0.4501`.
+- Mention fresh-clone eval works.
+- Mention that the final method avoids query-specific and template-specific logic.
+- After uploading the video, replace `Video link: TODO` in `README.md` with the real link.
