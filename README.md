@@ -1,36 +1,45 @@
 # Section B Retrieval Pipeline
 
-## Summary
+## Task
 
-This repository contains the final Section B retrieval pipeline. The submitted
-system is a clean hybrid retriever: it combines dense semantic retrieval,
-page-level BM25, chunk-level BM25, title/lead field BM25, title-focused dense
-chunks, generic lexical overlap features, and source-agreement reranking.
+This repository contains the Section B Wikipedia retrieval system. Given a
+natural-language query, the pipeline returns the top 10 page IDs using committed
+offline artifacts; grading should not rebuild indexes.
 
-Final public self-test:
+The submitted method is a clean hybrid retriever: it combines dense semantic
+retrieval, BM25 lexical retrieval, title-focused dense chunks, title/lead field
+BM25, generic lexical evidence, and source-agreement reranking.
+
+## Final Result
+
+Public self-test:
 
 ```text
 mean_ndcg@10=0.4501
 ```
 
-Final version:
+Reference scoring checkpoint:
 
 ```text
 Branch: exp/improve-reranker-rebalance-clean
-Retrieval tag: score-04501-clean
-Retrieval commit: b66d2f3744fd9a772c6e77d2810a7fac519c623c
-Safe fallback tag: safe-04300
+Tag: score-04501-clean
+Commit: b66d2f3744fd9a772c6e77d2810a7fac519c623c
 ```
 
-`score-04501-clean` marks the scoring retrieval implementation. Later commits
-on the same branch may contain documentation or repository-cleanup changes only.
+Safe fallback:
 
-VIDEO LINK: TODO
+```text
+Tag: safe-04300
+Commit: 24f628b316d07bdaf36ea72c6b25d2f4c3f522c4
+Score: 0.4300
+```
+
+Video link: TODO
 
 ## Fresh Clone Evaluation
 
-The grading run should load committed artifacts. No index rebuild is needed for
-grading.
+No rebuild is required. After cloning, pull Git LFS artifacts and run the public
+evaluation script:
 
 ```bash
 git clone https://github.com/diyarh26/wiki-retrieval-pipeline.git
@@ -52,7 +61,7 @@ If using the course VM or an existing virtual environment, replace `python` with
 that interpreter, for example:
 
 ```bash
-/home/student/wiki-retrieval-pipeline/.venv/bin/python scripts/eval_public.py
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 /home/student/wiki-retrieval-pipeline/.venv/bin/python scripts/eval_public.py
 ```
 
 ## Required Artifacts
@@ -81,8 +90,8 @@ More detail is in [docs/artifacts.md](docs/artifacts.md).
 
 1. Chunking
    - `chunk.py` splits each Wikipedia page into section-aware text chunks.
-   - The main dense index uses standard chunks; the title-focused dense artifact
-     gives extra dense evidence for pages where title context matters.
+   - The main dense index uses standard chunks.
+   - The title-190 dense artifact adds stronger title context.
 
 2. Embedding
    - `embed.py` embeds chunks and queries with
@@ -94,9 +103,9 @@ More detail is in [docs/artifacts.md](docs/artifacts.md).
      artifacts.
 
 4. Retrieval
-   - Candidate pages come from dense page retrieval, dense chunk retrieval,
-     page BM25, expanded-query BM25, chunk BM25, field BM25, and title dense
-     chunks.
+   - Candidate pages come from MiniLM dense page retrieval, dense chunk
+     retrieval, page BM25, expanded-query BM25, chunk BM25, title+lead field
+     BM25, and title-190 dense chunks.
    - The reranker uses a candidate pool of 120 pages.
 
 5. Reranking
@@ -118,7 +127,8 @@ More detail is in [docs/artifacts.md](docs/artifacts.md).
 | Title chunks + candidate pool | 0.4338 | Kept as clean recall improvement. |
 | Reranker rebalance | 0.4501 | Final submission candidate. |
 | Full 180/45/lead chunking | 0.4059 | Rejected; lower score. |
-| Two-channel dense180 | 0.4271 | Rejected; lower than safe baseline path. |
+| Dense180 variants | 0.4453-0.4501 | Rejected; worse or neutral with extra artifact cost. |
+| Pure RRF variants | below final | Rejected; less stable than weighted fusion. |
 | Lead-only cross-encoder | 0.4393 | Rejected as unstable despite improvement. |
 
 The old archived `archive/old-05809` branch reached 0.5809, but it was not used
@@ -134,6 +144,7 @@ The final retrieval path does not use:
 query IDs
 hardcoded page IDs
 public-query phrase triggers
+public-query-specific rules
 synthetic family extraction
 first-24-word signatures
 family-aware ranking
@@ -147,7 +158,8 @@ weighted source fusion.
 
 ## Team Members
 
-TODO: add team member names.
+- Aleen Nijim
+- Diyar Husayyan
 
 ## Collaboration Note
 

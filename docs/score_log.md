@@ -220,3 +220,15 @@ Artifacts changed: none
 General method: repository submission preparation without retrieval behavior changes
 Why it is not overfit: documentation and comments only; no query IDs, page IDs, trigger phrases, family/signature logic, or scoring changes were added
 Keep/reject: keep; final post-cleanup eval remains 0.4501
+
+Date: 2026-06-18
+Branch: exp/improve-reranker-rebalance-clean
+Commit: final submission cleanup commit
+Score: 0.4501
+Time: 27.57s official eval after final README/docs cleanup (`scripts/eval_public.py`)
+Delta vs current best 0.4501: +0.0000
+Files changed: README/docs/.gitignore cleanup and deletion of stale local/scratch files
+Artifacts changed: removed ignored local failed-experiment artifacts only; required final artifacts unchanged
+General method: submission polish without retrieval behavior changes
+Why it is not overfit: documentation and repository hygiene only; no query IDs, page IDs, trigger phrases, family/signature logic, or scoring changes were added
+Keep/reject: keep; final eval and fresh-clone eval must remain 0.4501

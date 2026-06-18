@@ -38,6 +38,13 @@ with stronger title context and falls back safely if the artifact is absent.
 | `page_features.json` | Generic page-feature artifact retained for compatibility with previous clean experiments. |
 | `page_signatures.json` | Historical artifact retained in the repository; the final retrieval path does not load or use it. |
 
+## Removed Local Experiment Outputs
+
+The final submission does not require the ignored dense180, lead-only BM25, or
+title-only BM25 experiment artifacts. The active path uses the artifacts listed
+above, especially `title_lead_bm25_*` rather than the separate `title_bm25_*` or
+`lead_bm25_*` groups.
+
 ## LFS
 
 Large `.npy` and `.index` artifacts are Git LFS files. A fresh checkout should

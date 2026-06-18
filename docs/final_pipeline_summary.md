@@ -6,6 +6,8 @@ Final retrieval tag: `score-04501-clean`
 
 Final retrieval commit: `b66d2f3744fd9a772c6e77d2810a7fac519c623c`
 
+Current submission branch: `exp/improve-reranker-rebalance-clean`
+
 Public score:
 
 ```text
@@ -51,6 +53,8 @@ template/family/signature/trigger logic. See `docs/old_05809_audit.md`.
 | Dense180 replacing title190 | 0.4480 | Lower score; q_public_23 regression. |
 | Dense180 as primary dense chunk index | 0.4453 | Lower score; q_public_18, q_public_19, q_public_23 regressions. |
 | Default + title190 + dense180 | 0.4501 | Neutral score and requires an extra untracked large artifact. |
+| Full 180/45/lead chunking | 0.4059 | Shorter chunks hurt final ranking and chunk BM25 stability. |
+| Pure RRF variants | below final | Less stable than the weighted global reranker. |
 | Lead-only cross-encoder | 0.4393 | Improved mean but unstable per-query behavior. |
 
 ## Submission Safety
