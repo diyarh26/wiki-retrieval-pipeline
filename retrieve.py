@@ -27,7 +27,7 @@ from utils import ENTRIES_DIR, K_EVAL
 DEFAULT_CHUNK_CANDIDATES = 2000
 DEFAULT_PAGE_CANDIDATES = 100
 DEFAULT_BM25_CANDIDATES = 100
-DEFAULT_CHUNK_BM25_CANDIDATES = 100
+DEFAULT_CHUNK_BM25_CANDIDATES = 150
 DEFAULT_FIELD_BM25_CANDIDATES = 100
 # Final rerank pool size.  120 kept the useful long-tail recall from the clean
 # candidate sources without adding the regressions seen at larger pool sizes.
